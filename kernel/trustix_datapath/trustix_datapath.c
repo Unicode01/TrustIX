@@ -14,6 +14,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/limits.h>
+#include <linux/math64.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/mutex.h>
@@ -238,6 +239,19 @@ enum trustix_datapath_secure_rx_error_stage {
 #define TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS 1024U
 #define TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS 65536U
 #define TRUSTIX_DATAPATH_WIRE_TUPLE_CACHE_MAX_SLOTS 2621440U
+#define TRUSTIX_DATAPATH_OUTER_TCP_ORDER_LOCKS 256U
+#define TRUSTIX_DATAPATH_INNER_GSO_FAULT_THRESHOLD_DEFAULT 8U
+#define TRUSTIX_DATAPATH_INNER_GSO_FAULT_WINDOW_MS_DEFAULT 1000U
+#define TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_THRESHOLD_DEFAULT 64U
+#define TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT 50000U
+#define TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE 1000000U
+/* Count both timeout bursts and sustained incomplete-frame degradation. */
+#define TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_WINDOW_MS_DEFAULT 60000U
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_TIMEOUT_MS_DEFAULT 10000U
+#define TRUSTIX_DATAPATH_INNER_GSO_NO_PROGRESS_MS_DEFAULT 5000U
+#define TRUSTIX_DATAPATH_INNER_GSO_COOLDOWN_MS_DEFAULT 60000U
+#define TRUSTIX_DATAPATH_INNER_GSO_MAX_COOLDOWN_MS_DEFAULT 900000U
+#define TRUSTIX_DATAPATH_INNER_GSO_STABLE_MS_DEFAULT 600000U
 #define TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT BIT(31)
 #define TRUSTIX_DATAPATH_SKB_MARK_RX_WORKER BIT(30)
 #define TRUSTIX_DATAPATH_HOOK_MAX 16U
@@ -249,6 +263,21 @@ enum trustix_datapath_secure_rx_error_stage {
 #define TRUSTIX_DATAPATH_TIXU_HEADER_LEN 32U
 #define TRUSTIX_DATAPATH_MIN_FRAME_HEADER_LEN TRUSTIX_DATAPATH_TIXU_HEADER_LEN
 #define TRUSTIX_DATAPATH_TIXT_MAX_PAYLOAD (64U * 1024U)
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS 128U
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES \
+	TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS \
+	(TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS / \
+	 TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES)
+#define TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SLOTS 256U
+#define TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES 4U
+#define TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SETS \
+	(TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SLOTS / \
+	 TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES)
+#define TRUSTIX_DATAPATH_INNER_GSO_PROBATION_MIN_CLAIMS 2U
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_FRAME_MAX \
+	(TRUSTIX_DATAPATH_TIXT_HEADER_LEN + TRUSTIX_DATAPATH_PACKET_MAX_LEN)
+#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_MAX_RANGES 128U
 #define TRUSTIX_DATAPATH_SECURE_HEADER_LEN 24U
 #define TRUSTIX_DATAPATH_SECURE_TAG_LEN 16U
 #define TRUSTIX_DATAPATH_SECURE_OVERHEAD \
@@ -707,6 +736,50 @@ struct trustix_datapath_rx_worker_slot {
 	bool stolen_skb;
 };
 
+struct trustix_datapath_inner_gso_reassembly_key {
+	const struct net *net;
+	__u32 src_ipv4;
+	__u32 dst_ipv4;
+	__u16 src_port;
+	__u16 dst_port;
+	int ifindex;
+	int target_ifindex;
+};
+
+struct trustix_datapath_inner_gso_reassembly_range {
+	__u32 start;
+	__u32 end;
+};
+
+struct trustix_datapath_inner_gso_reassembly_slot {
+	bool active;
+	__u64 flow_id;
+	__u64 epoch;
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	__u32 start_seq;
+	__u32 next_seq;
+	__u32 wire_len;
+	__u32 buffered_len;
+	__u32 received_len;
+	__u16 range_count;
+	unsigned long expires;
+	unsigned long stream_last_progress;
+	__u8 *data;
+	struct trustix_datapath_inner_gso_reassembly_range ranges[
+		TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_MAX_RANGES];
+};
+
+struct trustix_datapath_inner_gso_probation_slot {
+	bool active;
+	__u64 flow_id;
+	__u64 epoch;
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	unsigned long first_claim;
+	unsigned long last_claim;
+	unsigned long last_success;
+	unsigned int claims_since_success;
+};
+
 struct trustix_datapath_rx_stage_view {
 	struct trustix_datapath_tixt_frame frame;
 	struct trustix_datapath_ioc_classify inner;
@@ -924,6 +997,9 @@ trustix_datapath_rx_worker_trust_tcp_checksum(struct iphdr *iph,
 static int trustix_datapath_rx_worker_build_xmit_inner_skb(
 	struct net_device *target_dev, const __u8 *packet, __u32 len,
 	struct sk_buff **inner_skb_out);
+static int trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
+	struct net_device *target_dev, const __u8 *packet, __u32 len,
+	__u8 tixt_flags, struct sk_buff **inner_skb_out);
 static bool trustix_datapath_rx_worker_build_xmit_inner_skb_hold(
 	struct net_device *target_dev, const __u8 *packet, __u32 len,
 	__u32 extra_tailroom, struct sk_buff **inner_skb_out);
@@ -1040,6 +1116,499 @@ module_param_named(unsafe_features, trustix_datapath_unsafe_features, ullong,
 		   0444);
 MODULE_PARM_DESC(unsafe_features,
 		 "TrustIX datapath feature bits known by the module but not safe to use");
+
+enum trustix_datapath_inner_gso_runtime_event {
+	TRUSTIX_DATAPATH_INNER_GSO_EVENT_FRAME_FAULT,
+	TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT,
+	TRUSTIX_DATAPATH_INNER_GSO_EVENT_PROBATION_NO_PROGRESS,
+};
+
+static DEFINE_SPINLOCK(trustix_datapath_inner_gso_circuit_lock);
+static bool trustix_datapath_inner_gso_circuit_open;
+static bool trustix_datapath_inner_gso_circuit_recovering;
+static unsigned long trustix_datapath_inner_gso_circuit_until;
+static unsigned long trustix_datapath_inner_gso_fault_window_start;
+static unsigned long trustix_datapath_inner_gso_timeout_window_start;
+static unsigned long trustix_datapath_inner_gso_last_recovery;
+static unsigned int trustix_datapath_inner_gso_fault_window_count;
+static unsigned int trustix_datapath_inner_gso_timeout_window_count;
+static unsigned int trustix_datapath_inner_gso_timeout_success_credit;
+static unsigned int trustix_datapath_inner_gso_timeout_last_ratio_ppm;
+static unsigned int trustix_datapath_inner_gso_backoff_level;
+static unsigned int trustix_datapath_inner_gso_last_cooldown_ms;
+static unsigned int trustix_datapath_inner_gso_fault_threshold =
+	TRUSTIX_DATAPATH_INNER_GSO_FAULT_THRESHOLD_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_fault_window_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_FAULT_WINDOW_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_timeout_threshold =
+	TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_THRESHOLD_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_timeout_ratio_ppm =
+	TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_timeout_window_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_WINDOW_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_reassembly_timeout_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_TIMEOUT_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_no_progress_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_NO_PROGRESS_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_cooldown_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_COOLDOWN_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_max_cooldown_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_MAX_COOLDOWN_MS_DEFAULT;
+static unsigned int trustix_datapath_inner_gso_stable_ms =
+	TRUSTIX_DATAPATH_INNER_GSO_STABLE_MS_DEFAULT;
+static bool trustix_datapath_inner_gso_auto_recover;
+static unsigned long long trustix_datapath_inner_gso_runtime_faults;
+static unsigned long long trustix_datapath_inner_gso_circuit_trips;
+static unsigned long long trustix_datapath_inner_gso_timeout_circuit_trips;
+static unsigned long long
+	trustix_datapath_inner_gso_timeout_ratio_suppressions;
+static unsigned long long
+	trustix_datapath_inner_gso_no_progress_circuit_trips;
+static unsigned long long trustix_datapath_inner_gso_circuit_recoveries;
+static unsigned long long trustix_datapath_inner_gso_probation_arms;
+static unsigned long long trustix_datapath_inner_gso_probation_claims;
+static unsigned long long trustix_datapath_inner_gso_probation_successes;
+static unsigned long long trustix_datapath_inner_gso_probation_failures;
+static unsigned long long trustix_datapath_inner_gso_probation_idle_resets;
+static unsigned long long trustix_datapath_inner_gso_probation_evictions;
+static unsigned long long trustix_datapath_inner_gso_probation_collisions;
+static unsigned int trustix_datapath_inner_gso_last_no_progress_ms;
+static void trustix_datapath_clear_inner_gso_reassembly(void);
+static void trustix_datapath_sweep_inner_gso_reassembly(void);
+static void trustix_datapath_clear_inner_gso_probation_matching(
+	bool all, __u64 flow_id, __u64 epoch);
+static void trustix_datapath_inner_gso_probation_record_claim(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, __u64 flow_id, __u64 epoch);
+static void trustix_datapath_inner_gso_probation_record_success(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, const struct trustix_datapath_tixt_frame *frame);
+
+static __always_inline bool
+trustix_datapath_inner_gso_runtime_permitted(void)
+{
+	if (smp_load_acquire(&trustix_datapath_inner_gso_circuit_open))
+		return false;
+	return !READ_ONCE(trustix_datapath_inner_gso_circuit_recovering);
+}
+
+static unsigned int
+trustix_datapath_inner_gso_bounded_ms(unsigned int value,
+				      unsigned int fallback)
+{
+	if (!value)
+		value = fallback;
+	return min_t(unsigned int, value, 3600000U);
+}
+
+static unsigned int
+trustix_datapath_inner_gso_timeout_success_credit_cap(
+	unsigned int threshold, unsigned int ratio_ppm)
+{
+	__u64 cap;
+
+	ratio_ppm = min_t(unsigned int, ratio_ppm,
+			  TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE);
+	if (!ratio_ppm)
+		return 0;
+	threshold = max_t(unsigned int, threshold, 1U);
+	cap = div_u64((__u64)threshold *
+			  TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE,
+			  ratio_ppm);
+	return min_t(__u64, cap, UINT_MAX);
+}
+
+static bool trustix_datapath_inner_gso_timeout_ratio_trips(
+	unsigned int failures, unsigned int successes,
+	unsigned int ratio_ppm, unsigned int *observed_ppm)
+{
+	__u64 total = (__u64)failures + successes;
+	unsigned int observed = failures && total ?
+		min_t(__u64,
+		      div64_u64((__u64)failures *
+				TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE,
+				total),
+		      TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE) : 0;
+
+	if (observed_ppm)
+		*observed_ppm = observed;
+	ratio_ppm = min_t(unsigned int, ratio_ppm,
+			  TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE);
+	/* A zero ratio restores the legacy absolute-timeout threshold. */
+	return !ratio_ppm || observed >= ratio_ppm;
+}
+
+static void trustix_datapath_inner_gso_record_reassembly_success(void)
+{
+	unsigned int cap;
+	unsigned long flags;
+
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock, flags);
+	if (trustix_datapath_inner_gso_circuit_open)
+		goto out;
+	cap = trustix_datapath_inner_gso_timeout_success_credit_cap(
+		READ_ONCE(trustix_datapath_inner_gso_timeout_threshold),
+		READ_ONCE(trustix_datapath_inner_gso_timeout_ratio_ppm));
+	if (trustix_datapath_inner_gso_timeout_success_credit < cap)
+		trustix_datapath_inner_gso_timeout_success_credit++;
+out:
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock, flags);
+}
+
+static unsigned long trustix_datapath_inner_gso_reassembly_deadline(void)
+{
+	unsigned int timeout_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_reassembly_timeout_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_TIMEOUT_MS_DEFAULT);
+
+	return jiffies + max_t(unsigned long, 1,
+			       msecs_to_jiffies(timeout_ms));
+}
+
+static bool trustix_datapath_inner_gso_runtime_ready_now(void)
+{
+	unsigned long flags;
+	bool recover = false;
+	bool ready;
+
+	if (likely(trustix_datapath_inner_gso_runtime_permitted())) {
+		/* A stalled stream may have no later packet to reclaim its slot. */
+		trustix_datapath_sweep_inner_gso_reassembly();
+		if (likely(trustix_datapath_inner_gso_runtime_permitted()))
+			return true;
+	}
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock, flags);
+	if (READ_ONCE(trustix_datapath_inner_gso_auto_recover) &&
+	    trustix_datapath_inner_gso_circuit_open &&
+	    !trustix_datapath_inner_gso_circuit_recovering &&
+	    time_after_eq(jiffies, trustix_datapath_inner_gso_circuit_until)) {
+		trustix_datapath_inner_gso_circuit_recovering = true;
+		recover = true;
+	}
+	ready = !trustix_datapath_inner_gso_circuit_open &&
+		!trustix_datapath_inner_gso_circuit_recovering;
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock, flags);
+	if (!recover)
+		return ready;
+
+	/* Keep the circuit closed until every stale slot is gone. */
+	trustix_datapath_clear_inner_gso_reassembly();
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock, flags);
+	if (trustix_datapath_inner_gso_circuit_open &&
+	    trustix_datapath_inner_gso_circuit_recovering) {
+		trustix_datapath_inner_gso_fault_window_start = jiffies;
+		trustix_datapath_inner_gso_fault_window_count = 0;
+		trustix_datapath_inner_gso_timeout_window_start = jiffies;
+		trustix_datapath_inner_gso_timeout_window_count = 0;
+		trustix_datapath_inner_gso_timeout_success_credit = 0;
+		trustix_datapath_inner_gso_last_recovery = jiffies;
+		trustix_datapath_inner_gso_circuit_recoveries++;
+		trustix_datapath_inner_gso_circuit_recovering = false;
+		smp_store_release(&trustix_datapath_inner_gso_circuit_open,
+				  false);
+	}
+	ready = !trustix_datapath_inner_gso_circuit_open &&
+		!trustix_datapath_inner_gso_circuit_recovering;
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock, flags);
+	return ready;
+}
+
+static void
+trustix_datapath_inner_gso_record_runtime_event(
+	enum trustix_datapath_inner_gso_runtime_event event,
+	unsigned long stream_last_progress)
+{
+	unsigned int base_ms;
+	unsigned int cooldown_ms;
+	unsigned int max_ms;
+	unsigned int stable_ms;
+	unsigned int threshold;
+	unsigned int timeout_ratio_ppm;
+	unsigned int observed_timeout_ratio_ppm = 0;
+	unsigned int window_ms;
+	unsigned int level;
+	unsigned int *window_count;
+	unsigned long *window_start;
+	unsigned long flags;
+	unsigned long now = jiffies;
+	bool no_progress_trip = false;
+
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT) {
+		threshold = max_t(unsigned int, 1,
+			READ_ONCE(trustix_datapath_inner_gso_timeout_threshold));
+		window_ms = trustix_datapath_inner_gso_bounded_ms(
+			READ_ONCE(trustix_datapath_inner_gso_timeout_window_ms),
+			TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_WINDOW_MS_DEFAULT);
+	} else {
+		threshold = max_t(unsigned int, 1,
+			READ_ONCE(trustix_datapath_inner_gso_fault_threshold));
+		window_ms = trustix_datapath_inner_gso_bounded_ms(
+			READ_ONCE(trustix_datapath_inner_gso_fault_window_ms),
+			TRUSTIX_DATAPATH_INNER_GSO_FAULT_WINDOW_MS_DEFAULT);
+	}
+	base_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_cooldown_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_COOLDOWN_MS_DEFAULT);
+	max_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_max_cooldown_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_MAX_COOLDOWN_MS_DEFAULT);
+	max_ms = max(max_ms, base_ms);
+	stable_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_stable_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_STABLE_MS_DEFAULT);
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_PROBATION_NO_PROGRESS)
+		no_progress_trip = true;
+
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock, flags);
+	trustix_datapath_inner_gso_runtime_faults++;
+	if (trustix_datapath_inner_gso_circuit_open)
+		goto out;
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT) {
+		window_start = &trustix_datapath_inner_gso_timeout_window_start;
+		window_count = &trustix_datapath_inner_gso_timeout_window_count;
+	} else {
+		window_start = &trustix_datapath_inner_gso_fault_window_start;
+		window_count = &trustix_datapath_inner_gso_fault_window_count;
+	}
+	if (!*window_start ||
+	    time_after(now, *window_start + msecs_to_jiffies(window_ms))) {
+		*window_start = now;
+		*window_count = 0;
+	}
+	(*window_count)++;
+	if (!no_progress_trip && *window_count < threshold)
+		goto out;
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT) {
+		timeout_ratio_ppm = READ_ONCE(
+			trustix_datapath_inner_gso_timeout_ratio_ppm);
+		if (!trustix_datapath_inner_gso_timeout_ratio_trips(
+			    *window_count,
+			    trustix_datapath_inner_gso_timeout_success_credit,
+			    timeout_ratio_ppm,
+			    &observed_timeout_ratio_ppm)) {
+			trustix_datapath_inner_gso_timeout_last_ratio_ppm =
+				observed_timeout_ratio_ppm;
+			trustix_datapath_inner_gso_timeout_ratio_suppressions++;
+			*window_start = now;
+			*window_count = 0;
+			trustix_datapath_inner_gso_timeout_success_credit = 0;
+			goto out;
+		}
+		trustix_datapath_inner_gso_timeout_last_ratio_ppm =
+			observed_timeout_ratio_ppm;
+	}
+
+	if (trustix_datapath_inner_gso_last_recovery &&
+	    time_before(now, trustix_datapath_inner_gso_last_recovery +
+			msecs_to_jiffies(stable_ms)))
+		trustix_datapath_inner_gso_backoff_level = min_t(
+			unsigned int,
+			trustix_datapath_inner_gso_backoff_level + 1, 16U);
+	else
+		trustix_datapath_inner_gso_backoff_level = 0;
+
+	cooldown_ms = base_ms;
+	level = trustix_datapath_inner_gso_backoff_level;
+	while (level-- && cooldown_ms < max_ms)
+		cooldown_ms = min(max_ms, cooldown_ms * 2U);
+	trustix_datapath_inner_gso_last_cooldown_ms = cooldown_ms;
+	trustix_datapath_inner_gso_circuit_until =
+		now + msecs_to_jiffies(cooldown_ms);
+	trustix_datapath_inner_gso_circuit_open = true;
+	trustix_datapath_inner_gso_circuit_trips++;
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT)
+		trustix_datapath_inner_gso_timeout_circuit_trips++;
+	if (event == TRUSTIX_DATAPATH_INNER_GSO_EVENT_PROBATION_NO_PROGRESS)
+		trustix_datapath_inner_gso_probation_failures++;
+	if (no_progress_trip) {
+		trustix_datapath_inner_gso_no_progress_circuit_trips++;
+		trustix_datapath_inner_gso_last_no_progress_ms =
+			min_t(unsigned long, UINT_MAX,
+			      jiffies_to_msecs(now - stream_last_progress));
+	}
+out:
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock, flags);
+}
+
+static void trustix_datapath_inner_gso_record_runtime_fault(void)
+{
+	trustix_datapath_inner_gso_record_runtime_event(
+		TRUSTIX_DATAPATH_INNER_GSO_EVENT_FRAME_FAULT, 0);
+}
+
+static void trustix_datapath_inner_gso_record_reassembly_timeout(
+	unsigned long stream_last_progress)
+{
+	trustix_datapath_inner_gso_record_runtime_event(
+		TRUSTIX_DATAPATH_INNER_GSO_EVENT_REASSEMBLY_TIMEOUT,
+		stream_last_progress);
+}
+
+static void trustix_datapath_inner_gso_record_probation_no_progress(
+	unsigned long first_claim)
+{
+	trustix_datapath_inner_gso_record_runtime_event(
+		TRUSTIX_DATAPATH_INNER_GSO_EVENT_PROBATION_NO_PROGRESS,
+		first_claim);
+}
+
+static bool trustix_datapath_inner_gso_error_trips_circuit(int ret)
+{
+	switch (ret) {
+	case 0:
+	case -ETIMEDOUT:
+		/* Slot expiration is accounted exactly once by reassembly. */
+	case -ENOENT:
+	case -EILSEQ:
+		/* Continuations after one missing frame are secondary symptoms. */
+	case -EAGAIN:
+		/* The runtime circuit deliberately rejected this packet. */
+		return false;
+	default:
+		return true;
+	}
+}
+
+static int trustix_datapath_param_get_inner_gso_runtime_ready(
+	char *buffer, const struct kernel_param *kp)
+{
+	struct kernel_param local = *kp;
+	bool ready = trustix_datapath_inner_gso_runtime_ready_now();
+
+	local.arg = &ready;
+	return param_get_bool(buffer, &local);
+}
+
+static const struct kernel_param_ops
+	trustix_datapath_inner_gso_runtime_ready_ops = {
+		.get = trustix_datapath_param_get_inner_gso_runtime_ready,
+	};
+
+module_param_cb(inner_gso_runtime_ready,
+		&trustix_datapath_inner_gso_runtime_ready_ops,
+		&trustix_datapath_inner_gso_circuit_open, 0444);
+MODULE_PARM_DESC(inner_gso_runtime_ready,
+		 "Whether the inner-GSO receive circuit permits capability advertisement");
+module_param_named(inner_gso_auto_recover,
+		   trustix_datapath_inner_gso_auto_recover, bool, 0644);
+MODULE_PARM_DESC(inner_gso_auto_recover,
+		 "Automatically rearm inner-GSO after cooldown; disabled by default so a runtime fault stays on the reliable fallback until module reload or explicit opt-in");
+module_param_named(inner_gso_fault_threshold,
+		   trustix_datapath_inner_gso_fault_threshold, uint, 0644);
+MODULE_PARM_DESC(inner_gso_fault_threshold,
+		 "Inner-GSO failed frame or continuation events required to open the runtime circuit");
+module_param_named(inner_gso_fault_window_ms,
+		   trustix_datapath_inner_gso_fault_window_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_fault_window_ms,
+		 "Inner-GSO runtime circuit fault counting window in milliseconds");
+module_param_named(inner_gso_timeout_threshold,
+		   trustix_datapath_inner_gso_timeout_threshold, uint, 0644);
+MODULE_PARM_DESC(inner_gso_timeout_threshold,
+		 "Incomplete inner-GSO frames required within the timeout window to open the runtime circuit");
+module_param_named(inner_gso_timeout_ratio_ppm,
+		   trustix_datapath_inner_gso_timeout_ratio_ppm, uint, 0644);
+MODULE_PARM_DESC(inner_gso_timeout_ratio_ppm,
+		 "Minimum incomplete partial-frame ratio in parts per million required to open the runtime circuit");
+module_param_named(inner_gso_timeout_window_ms,
+		   trustix_datapath_inner_gso_timeout_window_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_timeout_window_ms,
+		 "Inner-GSO burst and sustained incomplete-frame circuit window in milliseconds");
+module_param_named(inner_gso_reassembly_timeout_ms,
+		   trustix_datapath_inner_gso_reassembly_timeout_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_reassembly_timeout_ms,
+		 "Inner-GSO partial-frame reassembly timeout in milliseconds");
+module_param_named(inner_gso_no_progress_ms,
+		   trustix_datapath_inner_gso_no_progress_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_no_progress_ms,
+		 "Claimed inner-GSO continuation activity without successful delivery required to open the runtime circuit");
+module_param_named(inner_gso_cooldown_ms,
+		   trustix_datapath_inner_gso_cooldown_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_cooldown_ms,
+		 "Inner-GSO runtime circuit base cooldown in milliseconds");
+module_param_named(inner_gso_max_cooldown_ms,
+		   trustix_datapath_inner_gso_max_cooldown_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_max_cooldown_ms,
+		 "Inner-GSO runtime circuit maximum backoff cooldown in milliseconds");
+module_param_named(inner_gso_stable_ms,
+		   trustix_datapath_inner_gso_stable_ms, uint, 0644);
+MODULE_PARM_DESC(inner_gso_stable_ms,
+		 "Inner-GSO healthy interval that resets runtime circuit backoff");
+module_param_named(inner_gso_runtime_faults,
+		   trustix_datapath_inner_gso_runtime_faults, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_runtime_faults,
+		 "Inner-GSO failed frame and continuation events observed at runtime");
+module_param_named(inner_gso_circuit_trips,
+		   trustix_datapath_inner_gso_circuit_trips, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_circuit_trips,
+		 "Inner-GSO runtime circuit open events");
+module_param_named(inner_gso_timeout_circuit_trips,
+		   trustix_datapath_inner_gso_timeout_circuit_trips, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_timeout_circuit_trips,
+		 "Inner-GSO runtime circuit opens caused by concentrated incomplete frames");
+module_param_named(inner_gso_timeout_success_credit,
+		   trustix_datapath_inner_gso_timeout_success_credit, uint, 0444);
+MODULE_PARM_DESC(inner_gso_timeout_success_credit,
+		 "Bounded successful partial-frame credit in the current timeout observation window");
+module_param_named(inner_gso_timeout_last_ratio_ppm,
+		   trustix_datapath_inner_gso_timeout_last_ratio_ppm, uint, 0444);
+MODULE_PARM_DESC(inner_gso_timeout_last_ratio_ppm,
+		 "Incomplete partial-frame ratio observed at the most recent timeout threshold evaluation");
+module_param_named(inner_gso_timeout_ratio_suppressions,
+		   trustix_datapath_inner_gso_timeout_ratio_suppressions,
+		   ullong, 0444);
+MODULE_PARM_DESC(inner_gso_timeout_ratio_suppressions,
+		 "Timeout threshold evaluations retained on inner-GSO because the incomplete-frame ratio remained healthy");
+module_param_named(inner_gso_no_progress_circuit_trips,
+		   trustix_datapath_inner_gso_no_progress_circuit_trips,
+		   ullong, 0444);
+MODULE_PARM_DESC(inner_gso_no_progress_circuit_trips,
+		 "Inner-GSO runtime circuit opens caused by an expired stream with no successful frame progress");
+module_param_named(inner_gso_circuit_recoveries,
+		   trustix_datapath_inner_gso_circuit_recoveries, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_circuit_recoveries,
+		 "Inner-GSO runtime circuit cooldown recoveries");
+module_param_named(inner_gso_probation_arms,
+		   trustix_datapath_inner_gso_probation_arms, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_arms,
+		 "Inner-GSO continuation liveness observation windows started");
+module_param_named(inner_gso_probation_claims,
+		   trustix_datapath_inner_gso_probation_claims, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_claims,
+		 "Claimed inner-GSO continuation packets observed by liveness probation");
+module_param_named(inner_gso_probation_successes,
+		   trustix_datapath_inner_gso_probation_successes, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_successes,
+		 "Successful inner-GSO deliveries that reset liveness probation");
+module_param_named(inner_gso_probation_failures,
+		   trustix_datapath_inner_gso_probation_failures, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_failures,
+		 "Inner-GSO liveness probation windows that reopened the runtime circuit");
+module_param_named(inner_gso_probation_idle_resets,
+		   trustix_datapath_inner_gso_probation_idle_resets, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_idle_resets,
+		 "Inner-GSO liveness windows reset after an idle receive interval");
+module_param_named(inner_gso_probation_evictions,
+		   trustix_datapath_inner_gso_probation_evictions, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_evictions,
+		 "Stale inner-GSO liveness slots recycled for a new tuple");
+module_param_named(inner_gso_probation_collisions,
+		   trustix_datapath_inner_gso_probation_collisions, ullong, 0444);
+MODULE_PARM_DESC(inner_gso_probation_collisions,
+		 "Inner-GSO liveness observations skipped because a bounded set was full");
+module_param_named(inner_gso_last_no_progress_ms,
+		   trustix_datapath_inner_gso_last_no_progress_ms, uint, 0444);
+MODULE_PARM_DESC(inner_gso_last_no_progress_ms,
+		 "Observed stream inactivity for the most recent no-progress circuit open");
+module_param_named(inner_gso_backoff_level,
+		   trustix_datapath_inner_gso_backoff_level, uint, 0444);
+MODULE_PARM_DESC(inner_gso_backoff_level,
+		 "Inner-GSO runtime circuit current cooldown backoff level");
+module_param_named(inner_gso_last_cooldown_ms,
+		   trustix_datapath_inner_gso_last_cooldown_ms, uint, 0444);
+MODULE_PARM_DESC(inner_gso_last_cooldown_ms,
+		 "Inner-GSO runtime circuit most recent cooldown in milliseconds");
 
 static unsigned long long trustix_datapath_selftests;
 module_param_named(selftests, trustix_datapath_selftests, ullong, 0444);
@@ -1996,6 +2565,218 @@ module_param_named(rx_worker_inner_gso_errors,
 		   trustix_datapath_rx_worker_inner_gso_errors, ullong, 0444);
 MODULE_PARM_DESC(rx_worker_inner_gso_errors,
 		 "TrustIX RX inner-GSO allocation, target, preparation, or queue errors");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_stream_packets;
+module_param_named(rx_worker_inner_gso_stream_packets,
+		   trustix_datapath_rx_worker_inner_gso_stream_packets,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_stream_packets,
+		 "GRO packets containing more than one complete TIX frame and at least one inner-GSO frame");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_stream_frames;
+module_param_named(rx_worker_inner_gso_stream_frames,
+		   trustix_datapath_rx_worker_inner_gso_stream_frames,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_stream_frames,
+		 "Complete TIX frames consumed from mixed inner-GSO GRO packets");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_regular_frames;
+module_param_named(rx_worker_inner_gso_regular_frames,
+		   trustix_datapath_rx_worker_inner_gso_regular_frames,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_regular_frames,
+		 "Non-inner-GSO TIX frames consumed from mixed inner-GSO GRO packets");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_continuation_drops;
+module_param_named(rx_worker_inner_gso_continuation_drops,
+		   trustix_datapath_rx_worker_inner_gso_continuation_drops,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_continuation_drops,
+		 "Claimed TIX-TCP continuation packets dropped before the host TCP stack");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_session_clears;
+module_param_named(rx_worker_inner_gso_session_clears,
+		   trustix_datapath_rx_worker_inner_gso_session_clears,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_session_clears,
+		 "Session state transitions that cleared bounded inner-GSO reassembly state");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_session_slots_cleared;
+module_param_named(rx_worker_inner_gso_session_slots_cleared,
+		   trustix_datapath_rx_worker_inner_gso_session_slots_cleared,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_session_slots_cleared,
+		 "Inner-GSO reassembly slots cleared by session state transitions");
+
+static struct trustix_datapath_inner_gso_reassembly_slot
+	trustix_datapath_inner_gso_reassembly_slots[
+		TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS];
+static spinlock_t trustix_datapath_inner_gso_reassembly_locks[
+	TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS];
+static __u8 *trustix_datapath_inner_gso_reassembly_data;
+static struct trustix_datapath_inner_gso_probation_slot
+	trustix_datapath_inner_gso_probation_slots[
+		TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SLOTS];
+static spinlock_t trustix_datapath_inner_gso_probation_locks[
+	TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SETS];
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_reassembly_started;
+module_param_named(rx_worker_inner_gso_reassembly_started,
+		   trustix_datapath_rx_worker_inner_gso_reassembly_started,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_reassembly_started,
+		 "Partial TIX frames admitted to bounded inner-GSO reassembly");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_reassembly_completed;
+module_param_named(rx_worker_inner_gso_reassembly_completed,
+		   trustix_datapath_rx_worker_inner_gso_reassembly_completed,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_reassembly_completed,
+		 "Bounded inner-GSO reassemblies validated and queued");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_continuation_matched;
+module_param_named(rx_worker_inner_gso_continuation_matched,
+		   trustix_datapath_rx_worker_inner_gso_continuation_matched,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_continuation_matched,
+		 "TIX-TCP continuation packets matched by tuple and TCP sequence");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_continuation_orphans;
+module_param_named(rx_worker_inner_gso_continuation_orphans,
+		   trustix_datapath_rx_worker_inner_gso_continuation_orphans,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_continuation_orphans,
+		 "Claimed TIX-TCP continuation packets without active reassembly state");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_sequence_gaps;
+module_param_named(rx_worker_inner_gso_sequence_gaps,
+		   trustix_datapath_rx_worker_inner_gso_sequence_gaps,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_sequence_gaps,
+		 "Inner-GSO reassemblies aborted by a TCP sequence gap or overlap");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead;
+module_param_named(rx_worker_inner_gso_sequence_gap_ahead,
+		   trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_sequence_gap_ahead,
+		 "Unmatched continuations ahead of the nearest expected TCP sequence");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_behind;
+module_param_named(rx_worker_inner_gso_sequence_gap_behind,
+		   trustix_datapath_rx_worker_inner_gso_sequence_gap_behind,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_sequence_gap_behind,
+		 "Unmatched continuations behind the nearest expected TCP sequence");
+
+static int trustix_datapath_rx_worker_inner_gso_last_sequence_gap;
+module_param_named(rx_worker_inner_gso_last_sequence_gap,
+		   trustix_datapath_rx_worker_inner_gso_last_sequence_gap,
+		   int, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_last_sequence_gap,
+		 "Signed TCP sequence delta for the most recent unmatched continuation");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_timeouts;
+module_param_named(rx_worker_inner_gso_timeouts,
+		   trustix_datapath_rx_worker_inner_gso_timeouts, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeouts,
+		 "Inner-GSO reassembly states expired before completion");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_start;
+module_param_named(rx_worker_inner_gso_timeouts_on_start,
+		   trustix_datapath_rx_worker_inner_gso_timeouts_on_start,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeouts_on_start,
+		 "Expired inner-GSO states reclaimed while admitting a frame head");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_append;
+module_param_named(rx_worker_inner_gso_timeouts_on_append,
+		   trustix_datapath_rx_worker_inner_gso_timeouts_on_append,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeouts_on_append,
+		 "Expired inner-GSO states reclaimed while matching a continuation");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep;
+module_param_named(rx_worker_inner_gso_timeouts_on_sweep,
+		   trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeouts_on_sweep,
+		 "Expired inner-GSO states reclaimed by the runtime capability sweep");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes;
+module_param_named(rx_worker_inner_gso_timeout_missing_bytes,
+		   trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeout_missing_bytes,
+		 "Bytes absent from inner-GSO states when they expire");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes;
+module_param_named(rx_worker_inner_gso_timeout_max_missing_bytes,
+		   trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_timeout_max_missing_bytes,
+		 "Largest byte deficit observed in one expired inner-GSO state");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_duplicate_starts;
+module_param_named(rx_worker_inner_gso_duplicate_starts,
+		   trustix_datapath_rx_worker_inner_gso_duplicate_starts,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_duplicate_starts,
+		 "Repeated frame heads merged into an existing reassembly state");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_collisions;
+module_param_named(rx_worker_inner_gso_collisions,
+		   trustix_datapath_rx_worker_inner_gso_collisions, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_collisions,
+		 "Inner-GSO reassembly starts rejected by a full bounded pool");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark;
+module_param_named(rx_worker_inner_gso_reassembly_high_watermark,
+		   trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_reassembly_high_watermark,
+		 "Peak concurrent inner-GSO reassemblies since counter reset");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_oom;
+module_param_named(rx_worker_inner_gso_oom,
+		   trustix_datapath_rx_worker_inner_gso_oom, ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_oom,
+		 "Inner-GSO reassembly preallocation or completed-frame allocation failures");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_tail_frames;
+module_param_named(rx_worker_inner_gso_tail_frames,
+		   trustix_datapath_rx_worker_inner_gso_tail_frames, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_tail_frames,
+		 "Complete TIX frames consumed after a reassembled frame in the same GRO packet");
+
+static unsigned long long trustix_datapath_rx_worker_tix_tcp_claimed_drops;
+module_param_named(rx_worker_tix_tcp_claimed_drops,
+		   trustix_datapath_rx_worker_tix_tcp_claimed_drops, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_tix_tcp_claimed_drops,
+		 "Claimed plaintext TIX-TCP packets dropped after framing or delivery failure");
 
 static unsigned long long
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks;
@@ -3407,6 +4188,22 @@ module_param_named(tx_plaintext_tix_tcp_shard_sequence_fallbacks,
 MODULE_PARM_DESC(tx_plaintext_tix_tcp_shard_sequence_fallbacks,
 		 "TrustIX plaintext TIX-TCP packets using the global outer sequence fallback");
 
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_tix_tcp_ordered_xmits);
+module_param_cb(tx_plaintext_tix_tcp_ordered_xmits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_tix_tcp_ordered_xmits, 0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_ordered_xmits,
+		 "TrustIX TIX-TCP outer skbs sequenced in final transmit order");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_tix_tcp_sequence_assign_errors;
+module_param_named(tx_plaintext_tix_tcp_sequence_assign_errors,
+		   trustix_datapath_tx_plaintext_tix_tcp_sequence_assign_errors,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_sequence_assign_errors,
+		 "TrustIX TIX-TCP outer skbs rejected before final sequence assignment");
+
 static unsigned long long
 	trustix_datapath_rx_tix_tcp_port_shard_matches;
 module_param_named(rx_tix_tcp_port_shard_matches,
@@ -3641,6 +4438,8 @@ static atomic64_t trustix_datapath_tx_sequence = ATOMIC64_INIT(0);
 static atomic64_t trustix_datapath_outer_tcp_sequence = ATOMIC64_INIT(1);
 static atomic64_t *trustix_datapath_outer_tcp_shard_sequences;
 static __u32 trustix_datapath_outer_tcp_sequence_flow_slots;
+static spinlock_t trustix_datapath_outer_tcp_order_locks[
+	TRUSTIX_DATAPATH_OUTER_TCP_ORDER_LOCKS];
 
 static DEFINE_SPINLOCK(trustix_datapath_tx_plaintext_lock);
 static struct trustix_datapath_tx_plaintext_slot
@@ -5165,6 +5964,116 @@ static __u32 trustix_datapath_clamp_rx_worker_slots(unsigned int requested)
 	return requested;
 }
 
+static int trustix_datapath_alloc_inner_gso_reassembly(void)
+{
+	__u8 *data;
+	unsigned int i;
+
+	data = vzalloc(array3_size(
+		TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS,
+		TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_FRAME_MAX,
+		sizeof(*data)));
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS; i++)
+		spin_lock_init(&trustix_datapath_inner_gso_reassembly_locks[i]);
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SETS; i++)
+		spin_lock_init(&trustix_datapath_inner_gso_probation_locks[i]);
+	memset(trustix_datapath_inner_gso_probation_slots, 0,
+	       sizeof(trustix_datapath_inner_gso_probation_slots));
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[i];
+
+		memset(slot, 0, sizeof(*slot));
+		if (data)
+			slot->data = data +
+				i * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_FRAME_MAX;
+	}
+	trustix_datapath_inner_gso_reassembly_data = data;
+	return data ? 0 : -ENOMEM;
+}
+
+static unsigned int trustix_datapath_clear_inner_gso_reassembly_matching(
+	bool all, __u64 flow_id, __u64 epoch)
+{
+	unsigned long flags;
+	unsigned int set;
+	unsigned int cleared = 0;
+
+	for (set = 0; set < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS;
+	     set++) {
+		unsigned int first =
+			set * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		unsigned int i;
+
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_reassembly_locks[set],
+			flags);
+		for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		     i++) {
+			struct trustix_datapath_inner_gso_reassembly_slot *slot =
+				&trustix_datapath_inner_gso_reassembly_slots[
+					first + i];
+			__u8 *data = slot->data;
+
+			if (!all &&
+			    (!slot->active || slot->flow_id != flow_id ||
+			     (epoch && slot->epoch != epoch)))
+				continue;
+			if (slot->active)
+				cleared++;
+			memset(slot, 0, sizeof(*slot));
+			slot->data = data;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_reassembly_locks[set],
+			flags);
+	}
+	return cleared;
+}
+
+static void trustix_datapath_clear_inner_gso_reassembly(void)
+{
+	trustix_datapath_clear_inner_gso_reassembly_matching(true, 0, 0);
+}
+
+static void trustix_datapath_clear_inner_gso_reassembly_for_session(
+	__u64 flow_id, __u64 epoch)
+{
+	unsigned int cleared;
+
+	if (!flow_id)
+		return;
+	cleared = trustix_datapath_clear_inner_gso_reassembly_matching(
+		false, flow_id, epoch);
+	trustix_datapath_clear_inner_gso_probation_matching(
+		false, flow_id, epoch);
+	trustix_datapath_rx_worker_inner_gso_session_clears++;
+	trustix_datapath_rx_worker_inner_gso_session_slots_cleared += cleared;
+}
+
+static void trustix_datapath_clear_inner_gso_reassembly_for_all_sessions(void)
+{
+	unsigned int cleared =
+		trustix_datapath_clear_inner_gso_reassembly_matching(true, 0, 0);
+
+	trustix_datapath_clear_inner_gso_probation_matching(true, 0, 0);
+	trustix_datapath_rx_worker_inner_gso_session_clears++;
+	trustix_datapath_rx_worker_inner_gso_session_slots_cleared += cleared;
+}
+
+static void trustix_datapath_free_inner_gso_reassembly(void)
+{
+	__u8 *data = trustix_datapath_inner_gso_reassembly_data;
+	unsigned int i;
+
+	trustix_datapath_clear_inner_gso_reassembly();
+	trustix_datapath_clear_inner_gso_probation_matching(true, 0, 0);
+	trustix_datapath_inner_gso_reassembly_data = NULL;
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS; i++)
+		trustix_datapath_inner_gso_reassembly_slots[i].data = NULL;
+	vfree(data);
+}
+
 static int trustix_datapath_alloc_rx_worker(void)
 {
 	unsigned int i;
@@ -5282,6 +6191,32 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_inner_gso_partial_frames = 0;
 	trustix_datapath_rx_worker_inner_gso_malformed = 0;
 	trustix_datapath_rx_worker_inner_gso_errors = 0;
+	trustix_datapath_rx_worker_inner_gso_stream_packets = 0;
+	trustix_datapath_rx_worker_inner_gso_stream_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_regular_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_drops = 0;
+	trustix_datapath_rx_worker_inner_gso_session_clears = 0;
+	trustix_datapath_rx_worker_inner_gso_session_slots_cleared = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_started = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_completed = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_matched = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_orphans = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gaps = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_behind = 0;
+	trustix_datapath_rx_worker_inner_gso_last_sequence_gap = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_start = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_append = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep = 0;
+	trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes = 0;
+	trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes = 0;
+	trustix_datapath_rx_worker_inner_gso_duplicate_starts = 0;
+	trustix_datapath_rx_worker_inner_gso_collisions = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark = 0;
+	trustix_datapath_rx_worker_inner_gso_oom = 0;
+	trustix_datapath_rx_worker_inner_gso_tail_frames = 0;
+	trustix_datapath_rx_worker_tix_tcp_claimed_drops = 0;
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks = 0;
 	trustix_datapath_rx_worker_partial_checksum_metadata_repairs = 0;
 	trustix_datapath_rx_worker_dst_mac_hits = 0;
@@ -5384,6 +6319,8 @@ static int trustix_datapath_alloc_rx_worker(void)
 			NULL;
 		trustix_datapath_rx_worker_single_coalesce_slots[i].frames = 0;
 	}
+	if (trustix_datapath_alloc_inner_gso_reassembly())
+		trustix_datapath_rx_worker_inner_gso_oom++;
 	return 0;
 }
 
@@ -6027,6 +6964,7 @@ static void trustix_datapath_rx_worker_clear(void)
 
 static void trustix_datapath_rx_worker_drop_pending_sync(void)
 {
+	trustix_datapath_clear_inner_gso_reassembly();
 	trustix_datapath_rx_worker_single_coalesce_drop_all();
 	trustix_datapath_rx_worker_inline_pair_drop_all();
 	trustix_datapath_rx_worker_clear();
@@ -6062,6 +7000,7 @@ static void trustix_datapath_free_rx_worker(void)
 	trustix_datapath_rx_worker_coalesce_pending = NULL;
 	trustix_datapath_rx_worker_coalesce_slots = NULL;
 	trustix_datapath_rx_worker_coalesce_scratch_capacity = 0;
+	trustix_datapath_free_inner_gso_reassembly();
 }
 
 static int trustix_datapath_alloc_rx_stage(void)
@@ -6313,8 +7252,10 @@ trustix_datapath_tix_tcp_port_for_shard(__u16 base_port, __u8 shard)
 static __always_inline __u8
 trustix_datapath_tix_tcp_port_shard_for_hash(__u32 hash)
 {
-	return (__u8)(trustix_datapath_rx_worker_mix_hash(hash) &
-		      (TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS - 1U));
+	/* Shard zero is the real compat TCP control connection. */
+	return (__u8)(1U +
+		      trustix_datapath_rx_worker_mix_hash(hash) %
+			      (TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS - 1U));
 }
 
 static bool trustix_datapath_tix_tcp_port_shard_match(
@@ -6529,6 +7470,18 @@ trustix_datapath_wire_tuple_cache_match(
 	__u64 flow_id, __u32 src_ipv4, __u32 dst_ipv4, __u16 src_port,
 	__u16 dst_port, __u8 protocol)
 {
+	return entry && entry->used && (!flow_id || entry->flow_id == flow_id) &&
+	       entry->src_ipv4 == src_ipv4 && entry->dst_ipv4 == dst_ipv4 &&
+	       entry->src_port == src_port && entry->dst_port == dst_port &&
+	       entry->protocol == protocol;
+}
+
+static bool
+trustix_datapath_wire_tuple_cache_match_exact(
+	const struct trustix_datapath_session_wire_tuple_cache_entry *entry,
+	__u64 flow_id, __u32 src_ipv4, __u32 dst_ipv4, __u16 src_port,
+	__u16 dst_port, __u8 protocol)
+{
 	return entry && entry->used && entry->flow_id == flow_id &&
 	       entry->src_ipv4 == src_ipv4 && entry->dst_ipv4 == dst_ipv4 &&
 	       entry->src_port == src_port && entry->dst_port == dst_port &&
@@ -6545,7 +7498,8 @@ trustix_datapath_wire_tuple_cache_hash(__u64 flow_id, __u32 src_ipv4,
 	key[0] = src_ipv4;
 	key[1] = dst_ipv4;
 	key[2] = ((__u64)src_port << 16) | (__u64)dst_port;
-	key[3] = flow_id ^ ((__u64)protocol << 56);
+	key[3] = (__u64)protocol << 56;
+	(void)flow_id;
 	return trustix_datapath_key_hash(key);
 }
 
@@ -6653,7 +7607,7 @@ trustix_datapath_wire_tuple_cache_insert_one_locked(
 				trustix_datapath_session_wire_tuple_cache_capacity];
 
 		if (entry->used &&
-		    !trustix_datapath_wire_tuple_cache_match(
+		    !trustix_datapath_wire_tuple_cache_match_exact(
 			    entry, flow_id, src_ipv4, dst_ipv4, src_port,
 			    dst_port, protocol))
 			continue;
@@ -7085,6 +8039,10 @@ static int trustix_datapath_state_apply_locked_maybe_rebuild(
 	struct trustix_datapath_state_table *table;
 	struct trustix_datapath_state_slot *slot;
 	__u64 runtime[2] = {};
+	__u64 stale_inner_gso_flow_id = 0;
+	__u64 stale_inner_gso_epoch = 0;
+	bool clear_inner_gso_session = false;
+	bool clear_all_inner_gso_sessions = false;
 	int ret;
 
 	if (!state)
@@ -7097,7 +8055,46 @@ static int trustix_datapath_state_apply_locked_maybe_rebuild(
 			return ret;
 	}
 	table = trustix_datapath_table_for_kind(state->kind);
+	if (state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION &&
+	    trustix_datapath_table_usable_locked(table)) {
+		switch (state->op) {
+		case TRUSTIX_DATAPATH_STATE_OP_UPSERT:
+			slot = trustix_datapath_find_slot(table, state->key);
+			if (slot &&
+			    (slot->flags &
+			     TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO) &&
+			    (!(state->flags &
+			       TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO) ||
+			     slot->value[0] != state->value[0] ||
+			     slot->value[2] != state->value[2])) {
+				stale_inner_gso_flow_id = slot->value[0];
+				stale_inner_gso_epoch = slot->value[2];
+				clear_inner_gso_session = true;
+			}
+			break;
+		case TRUSTIX_DATAPATH_STATE_OP_DELETE:
+			slot = trustix_datapath_find_slot(table, state->key);
+			if (slot &&
+			    (slot->flags &
+			     TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO)) {
+				stale_inner_gso_flow_id = slot->value[0];
+				stale_inner_gso_epoch = slot->value[2];
+				clear_inner_gso_session = true;
+			}
+			break;
+		case TRUSTIX_DATAPATH_STATE_OP_CLEAR:
+			clear_all_inner_gso_sessions = true;
+			break;
+		default:
+			break;
+		}
+	}
 	ret = trustix_datapath_state_apply_to_table(table, state, true);
+	if (!ret && clear_all_inner_gso_sessions)
+		trustix_datapath_clear_inner_gso_reassembly_for_all_sessions();
+	else if (!ret && clear_inner_gso_session)
+		trustix_datapath_clear_inner_gso_reassembly_for_session(
+			stale_inner_gso_flow_id, stale_inner_gso_epoch);
 	if (!ret && state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION_CRYPTO &&
 	    state->op == TRUSTIX_DATAPATH_STATE_OP_UPSERT) {
 		slot = trustix_datapath_find_slot(table, state->key);
@@ -7623,28 +8620,25 @@ trustix_datapath_session_wire_for_tuple_any_flow_locked(
 		return cached;
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
-		__u32 local_ipv4;
-		__u32 remote_ipv4;
-		__u16 local_port;
-		__u16 remote_port;
+		struct trustix_datapath_state_slot *session;
+		bool matched_reverse = false;
+		__u8 shard = 0;
 
 		if (!slot->used)
 			continue;
 		if ((__u32)slot->value[4] != transport)
 			continue;
-		local_ipv4 = (__u32)slot->value[1];
-		remote_ipv4 = (__u32)slot->value[2];
-		local_port = (__u16)(slot->value[3] >> 16);
-		remote_port = (__u16)slot->value[3];
-		if (local_ipv4 == src_ipv4 && remote_ipv4 == dst_ipv4 &&
-		    local_port == src_port && remote_port == dst_port)
-			return slot;
-		if (local_ipv4 == dst_ipv4 && remote_ipv4 == src_ipv4 &&
-		    local_port == dst_port && remote_port == src_port) {
-			if (reverse)
-				*reverse = true;
-			return slot;
-		}
+		session = trustix_datapath_session_for_flow_id_locked(
+			slot->value[0]);
+		if (!trustix_datapath_session_wire_tuple_matches_locked(
+			    slot, session, src_ipv4, dst_ipv4, src_port,
+			    dst_port, &matched_reverse, &shard))
+			continue;
+		if (reverse)
+			*reverse = matched_reverse;
+		if (shard)
+			trustix_datapath_rx_tix_tcp_port_shard_matches++;
+		return slot;
 	}
 	return NULL;
 }
@@ -8749,6 +9743,74 @@ static __u32 trustix_datapath_tx_outer_tcp_next_seq(
 	return (__u32)(end - step);
 }
 
+static spinlock_t *trustix_datapath_tx_outer_tcp_order_lock(
+	const struct trustix_datapath_tx_plan *plan)
+{
+	__u32 hash;
+
+	if (!plan)
+		return &trustix_datapath_outer_tcp_order_locks[0];
+	hash = plan->local_ipv4 ^
+	       ((plan->remote_ipv4 << 7) | (plan->remote_ipv4 >> 25)) ^
+	       ((__u32)plan->local_port << 16) ^ plan->remote_port ^
+	       ((__u32)plan->outer_tcp_port_shard << 24);
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	return &trustix_datapath_outer_tcp_order_locks[
+		hash & (TRUSTIX_DATAPATH_OUTER_TCP_ORDER_LOCKS - 1U)];
+}
+
+static int trustix_datapath_tx_assign_outer_tcp_sequence(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan)
+{
+	__wsum sum;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	__u32 network_offset;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 total_len;
+	__u32 payload_len;
+
+	if (!skb || !plan || plan->outer_protocol != IPPROTO_TCP)
+		return -EINVAL;
+	network_offset = skb_network_offset(skb);
+	if (network_offset > skb->len ||
+	    !pskb_may_pull(skb, network_offset + sizeof(*iph)))
+		return -EMSGSIZE;
+	iph = (struct iphdr *)skb_network_header(skb);
+	if (!iph || iph->version != 4 || iph->ihl < 5 ||
+	    iph->protocol != IPPROTO_TCP)
+		return -EPROTONOSUPPORT;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len +
+				  sizeof(*tcph)))
+		return -EMSGSIZE;
+	iph = (struct iphdr *)skb_network_header(skb);
+	tcph = (struct tcphdr *)((__u8 *)iph + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) ||
+	    total_len <= ip_header_len + tcp_header_len ||
+	    total_len > skb->len - network_offset)
+		return -EMSGSIZE;
+	payload_len = total_len - ip_header_len - tcp_header_len;
+	tcph->seq = htonl(
+		trustix_datapath_tx_outer_tcp_next_seq(plan, payload_len));
+	if (skb->ip_summed != CHECKSUM_PARTIAL) {
+		tcph->check = 0;
+		sum = skb_checksum(skb, network_offset + ip_header_len,
+				   total_len - ip_header_len, 0);
+		tcph->check = csum_tcpudp_magic(
+			iph->saddr, iph->daddr, total_len - ip_header_len,
+			IPPROTO_TCP, sum);
+		skb->ip_summed = CHECKSUM_NONE;
+	}
+	return 0;
+}
+
 static __always_inline unsigned int
 trustix_datapath_tx_plaintext_dst_mac_cache_set(
 	const struct net_device *target_dev,
@@ -9030,9 +10092,7 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 	} else {
 		trustix_datapath_put_be16(packet + 20, plan->local_port);
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
-		trustix_datapath_put_be32(
-			packet + 24,
-			trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
+		trustix_datapath_put_be32(packet + 24, 0);
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -9190,6 +10250,7 @@ trustix_datapath_tx_send_outer_skb_direct(struct sk_buff *skb,
 					  struct net_device *target_dev,
 					  const struct trustix_datapath_tx_plan *plan)
 {
+	spinlock_t *order_lock = NULL;
 	struct neighbour *neigh = NULL;
 	struct ethhdr *eth;
 	struct flowi4 fl4 = {};
@@ -9258,6 +10319,18 @@ trustix_datapath_tx_send_outer_skb_direct(struct sk_buff *skb,
 	skb->mark |= TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT;
 	skb->protocol = htons(ETH_P_IP);
 	skb->pkt_type = PACKET_OUTGOING;
+	if (plan->outer_protocol == IPPROTO_TCP) {
+		order_lock = trustix_datapath_tx_outer_tcp_order_lock(plan);
+		spin_lock_bh(order_lock);
+		ret = trustix_datapath_tx_assign_outer_tcp_sequence(skb, plan);
+		if (ret) {
+			trustix_datapath_tx_plaintext_tix_tcp_sequence_assign_errors++;
+			spin_unlock_bh(order_lock);
+			return -EMSGSIZE;
+		}
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_tix_tcp_ordered_xmits);
+	}
 	skb_push(skb, ETH_HLEN);
 	skb_reset_mac_header(skb);
 	skb_set_network_header(skb, ETH_HLEN);
@@ -9270,6 +10343,8 @@ trustix_datapath_tx_send_outer_skb_direct(struct sk_buff *skb,
 	trustix_datapath_tx_plaintext_set_hash_tx_queue(skb, target_dev,
 							plan);
 	ret = dev_queue_xmit(skb);
+	if (order_lock)
+		spin_unlock_bh(order_lock);
 	if (ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN) {
 		trustix_datapath_tx_plaintext_direct_xmit_packets++;
 		return 0;
@@ -9283,6 +10358,7 @@ trustix_datapath_tx_send_outer_skb(struct sk_buff *skb,
 				   struct net_device *target_dev,
 				   const struct trustix_datapath_tx_plan *plan)
 {
+	spinlock_t *order_lock = NULL;
 	struct flowi4 fl4 = {};
 	struct rtable *rt;
 	struct net *net;
@@ -9317,7 +10393,22 @@ trustix_datapath_tx_send_outer_skb(struct sk_buff *skb,
 	skb_dst_set(skb, &rt->dst);
 	skb->dev = target_dev;
 	skb->mark |= TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT;
+	if (plan->outer_protocol == IPPROTO_TCP) {
+		order_lock = trustix_datapath_tx_outer_tcp_order_lock(plan);
+		spin_lock_bh(order_lock);
+		ret = trustix_datapath_tx_assign_outer_tcp_sequence(skb, plan);
+		if (ret) {
+			trustix_datapath_tx_plaintext_tix_tcp_sequence_assign_errors++;
+			spin_unlock_bh(order_lock);
+			kfree_skb(skb);
+			return -EMSGSIZE;
+		}
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_tix_tcp_ordered_xmits);
+	}
 	ret = ip_local_out(net, NULL, skb);
+	if (order_lock)
+		spin_unlock_bh(order_lock);
 	if (ret)
 		return ret;
 	return 0;
@@ -9479,9 +10570,7 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	} else {
 		trustix_datapath_put_be16(packet + 20, plan->local_port);
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
-		trustix_datapath_put_be32(
-			packet + 24,
-			trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
+		trustix_datapath_put_be32(packet + 24, 0);
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -10466,9 +11555,7 @@ static int trustix_datapath_tx_build_inner_gso_skb(
 					  plan->remote_ipv4);
 	trustix_datapath_put_be16(packet + 20, plan->local_port);
 	trustix_datapath_put_be16(packet + 22, plan->remote_port);
-	trustix_datapath_put_be32(
-		packet + 24,
-		trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
+	trustix_datapath_put_be32(packet + 24, 0);
 	packet[32] = 0x50;
 	packet[33] = 0x18;
 	trustix_datapath_put_be16(packet + 34, 65535);
@@ -10680,8 +11767,7 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	packet[32] = 0x50;
 	packet[33] = 0x18;
 	trustix_datapath_put_be16(packet + 34, 65535);
-	outer_sequence = trustix_datapath_tx_outer_tcp_next_seq(
-		plan, stream_payload_len);
+	outer_sequence = 0;
 	trustix_datapath_put_be32(packet + 24, (__u32)outer_sequence);
 
 	pos = packet + outer_header_len;
@@ -12841,27 +13927,958 @@ error:
 	return ret;
 }
 
-static int trustix_datapath_rx_worker_try_inner_gso(
-	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
+static void trustix_datapath_inner_gso_reassembly_reset_locked(
+	struct trustix_datapath_inner_gso_reassembly_slot *slot)
+{
+	__u8 *data;
+
+	if (!slot)
+		return;
+	data = slot->data;
+	memset(slot, 0, sizeof(*slot));
+	slot->data = data;
+}
+
+static unsigned long trustix_datapath_inner_gso_reassembly_expire_locked(
+	struct trustix_datapath_inner_gso_reassembly_slot *slot,
+	bool on_start, bool on_sweep)
+{
+	__u32 missing = 0;
+	unsigned long stream_last_progress;
+
+	if (!slot || !slot->active)
+		return 0;
+	stream_last_progress = slot->stream_last_progress;
+	if (slot->wire_len > slot->received_len)
+		missing = slot->wire_len - slot->received_len;
+	trustix_datapath_rx_worker_inner_gso_timeouts++;
+	if (on_sweep)
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep++;
+	else if (on_start)
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_start++;
+	else
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_append++;
+	trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes += missing;
+	if (missing >
+	    trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes)
+		trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes =
+			missing;
+	trustix_datapath_inner_gso_reassembly_reset_locked(slot);
+	return stream_last_progress;
+}
+
+static void trustix_datapath_sweep_inner_gso_reassembly(void)
+{
+	unsigned long oldest_progress = 0;
+	unsigned long flags;
+	unsigned long now = jiffies;
+	unsigned int expired = 0;
+	unsigned int set;
+
+	if (!READ_ONCE(trustix_datapath_inner_gso_reassembly_data))
+		return;
+	for (set = 0; set < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS;
+	     set++) {
+		unsigned int first =
+			set * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		unsigned int i;
+
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_reassembly_locks[set],
+			flags);
+		for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		     i++) {
+			struct trustix_datapath_inner_gso_reassembly_slot *slot =
+				&trustix_datapath_inner_gso_reassembly_slots[
+					first + i];
+			unsigned long progress;
+
+			if (!slot->active || time_before(now, slot->expires))
+				continue;
+			progress =
+				trustix_datapath_inner_gso_reassembly_expire_locked(
+					slot, false, true);
+			if (progress &&
+			    (!oldest_progress ||
+			     time_before(progress, oldest_progress)))
+				oldest_progress = progress;
+			expired++;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_reassembly_locks[set],
+			flags);
+	}
+	while (expired--) {
+		trustix_datapath_inner_gso_record_reassembly_timeout(
+			oldest_progress);
+	}
+}
+
+static void trustix_datapath_inner_gso_reassembly_key_init(
+	struct trustix_datapath_inner_gso_reassembly_key *key,
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex)
+{
+	memset(key, 0, sizeof(*key));
+	key->net = skb && skb->dev ? dev_net(skb->dev) : NULL;
+	key->src_ipv4 = outer->src_ipv4;
+	key->dst_ipv4 = outer->dst_ipv4;
+	key->src_port = outer->src_port;
+	key->dst_port = outer->dst_port;
+	key->ifindex = skb && skb->dev ? skb->dev->ifindex : 0;
+	key->target_ifindex = target_ifindex;
+}
+
+static bool trustix_datapath_inner_gso_reassembly_key_equal(
+	const struct trustix_datapath_inner_gso_reassembly_key *left,
+	const struct trustix_datapath_inner_gso_reassembly_key *right)
+{
+	return left && right && left->net == right->net &&
+	       left->src_ipv4 == right->src_ipv4 &&
+	       left->dst_ipv4 == right->dst_ipv4 &&
+	       left->src_port == right->src_port &&
+	       left->dst_port == right->dst_port &&
+	       left->ifindex == right->ifindex &&
+	       left->target_ifindex == right->target_ifindex;
+}
+
+static unsigned int trustix_datapath_inner_gso_reassembly_set(
+	const struct trustix_datapath_inner_gso_reassembly_key *key);
+
+static void trustix_datapath_inner_gso_reassembly_record_progress(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, const struct trustix_datapath_tixt_frame *frame)
+{
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	unsigned long flags;
+	unsigned long now = jiffies;
+	unsigned int set;
+	unsigned int first;
+	unsigned int i;
+
+	if (!skb || !outer || !frame)
+		return;
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&key, skb, outer, target_ifindex);
+	set = trustix_datapath_inner_gso_reassembly_set(&key);
+	first = set * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+	spin_lock_irqsave(&trustix_datapath_inner_gso_reassembly_locks[set],
+			  flags);
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[first + i];
+
+		if (!slot->active || slot->flow_id != frame->flow_id ||
+		    slot->epoch != frame->epoch ||
+		    !trustix_datapath_inner_gso_reassembly_key_equal(
+			    &slot->key, &key))
+			continue;
+		slot->stream_last_progress = now;
+	}
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_reassembly_locks[set], flags);
+	trustix_datapath_inner_gso_probation_record_success(
+		skb, outer, target_ifindex, frame);
+}
+
+static unsigned int trustix_datapath_inner_gso_reassembly_set(
+	const struct trustix_datapath_inner_gso_reassembly_key *key)
+{
+	__u64 hash_key[4];
+
+	hash_key[0] = ((__u64)key->src_ipv4 << 32) | key->dst_ipv4;
+	hash_key[1] = ((__u64)key->src_port << 48) |
+		       ((__u64)key->dst_port << 32) |
+		       (__u32)key->ifindex;
+	hash_key[2] = (unsigned long)key->net;
+	hash_key[3] = (__u32)key->target_ifindex;
+	return trustix_datapath_key_hash(hash_key) &
+	       (TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SETS - 1U);
+}
+
+static unsigned long trustix_datapath_inner_gso_probation_last_activity(
+	const struct trustix_datapath_inner_gso_probation_slot *slot)
+{
+	if (!slot)
+		return 0;
+	if (time_after(slot->last_claim, slot->last_success))
+		return slot->last_claim;
+	return slot->last_success;
+}
+
+static unsigned int trustix_datapath_inner_gso_probation_set(
+	const struct trustix_datapath_inner_gso_reassembly_key *key,
+	__u64 flow_id, __u64 epoch)
+{
+	__u64 hash_key[4];
+
+	hash_key[0] = ((__u64)key->src_ipv4 << 32) | key->dst_ipv4;
+	hash_key[1] = ((__u64)key->src_port << 48) |
+		       ((__u64)key->dst_port << 32) |
+		       (__u32)key->ifindex;
+	hash_key[2] = (__u64)(unsigned long)key->net ^ flow_id;
+	hash_key[3] = ((__u64)(__u32)key->target_ifindex << 32) ^ epoch;
+	return trustix_datapath_key_hash(hash_key) &
+	       (TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SETS - 1U);
+}
+
+static bool trustix_datapath_inner_gso_probation_slot_matches(
+	const struct trustix_datapath_inner_gso_probation_slot *slot,
+	const struct trustix_datapath_inner_gso_reassembly_key *key,
+	__u64 flow_id, __u64 epoch)
+{
+	return slot && slot->active && slot->flow_id == flow_id &&
+	       slot->epoch == epoch &&
+	       trustix_datapath_inner_gso_reassembly_key_equal(&slot->key,
+							 key);
+}
+
+static struct trustix_datapath_inner_gso_probation_slot *
+trustix_datapath_inner_gso_probation_get_locked(
+	const struct trustix_datapath_inner_gso_reassembly_key *key,
+	__u64 flow_id, __u64 epoch, unsigned int set, unsigned long now,
+	bool create)
+{
+	struct trustix_datapath_inner_gso_probation_slot *empty = NULL;
+	struct trustix_datapath_inner_gso_probation_slot *stale = NULL;
+	unsigned long stale_activity = 0;
+	unsigned int stable_ms;
+	unsigned int first;
+	unsigned int i;
+
+	first = set * TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES;
+	stable_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_stable_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_STABLE_MS_DEFAULT);
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES; i++) {
+		struct trustix_datapath_inner_gso_probation_slot *slot =
+			&trustix_datapath_inner_gso_probation_slots[first + i];
+		unsigned long activity;
+
+		if (trustix_datapath_inner_gso_probation_slot_matches(
+			    slot, key, flow_id, epoch))
+			return slot;
+		if (!slot->active) {
+			if (!empty)
+				empty = slot;
+			continue;
+		}
+		activity = trustix_datapath_inner_gso_probation_last_activity(
+			slot);
+		if (activity &&
+		    time_before(now, activity + msecs_to_jiffies(stable_ms)))
+			continue;
+		if (!stale || !activity ||
+		    (stale_activity && time_before(activity, stale_activity))) {
+			stale = slot;
+			stale_activity = activity;
+		}
+	}
+	if (!create)
+		return NULL;
+	if (!empty)
+		empty = stale;
+	if (!empty) {
+		trustix_datapath_inner_gso_probation_collisions++;
+		return NULL;
+	}
+	if (empty->active)
+		trustix_datapath_inner_gso_probation_evictions++;
+	memset(empty, 0, sizeof(*empty));
+	empty->active = true;
+	empty->flow_id = flow_id;
+	empty->epoch = epoch;
+	empty->key = *key;
+	return empty;
+}
+
+static void trustix_datapath_clear_inner_gso_probation_matching(
+	bool all, __u64 flow_id, __u64 epoch)
+{
+	unsigned long flags;
+	unsigned int set;
+
+	for (set = 0; set < TRUSTIX_DATAPATH_INNER_GSO_PROBATION_SETS;
+	     set++) {
+		unsigned int first =
+			set * TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES;
+		unsigned int i;
+
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_probation_locks[set], flags);
+		for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_PROBATION_PROBES;
+		     i++) {
+			struct trustix_datapath_inner_gso_probation_slot *slot =
+				&trustix_datapath_inner_gso_probation_slots[
+					first + i];
+
+			if (!slot->active ||
+			    (!all &&
+			     (slot->flow_id != flow_id ||
+			      (epoch && slot->epoch != epoch))))
+				continue;
+			memset(slot, 0, sizeof(*slot));
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_probation_locks[set], flags);
+	}
+}
+
+static void trustix_datapath_inner_gso_probation_record_success(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, const struct trustix_datapath_tixt_frame *frame)
+{
+	struct trustix_datapath_inner_gso_probation_slot *slot;
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	unsigned long flags;
+	unsigned long now = jiffies;
+	unsigned int set;
+
+	if (!skb || !outer || !frame || !frame->flow_id)
+		return;
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&key, skb, outer, target_ifindex);
+	set = trustix_datapath_inner_gso_probation_set(
+		&key, frame->flow_id, frame->epoch);
+	spin_lock_irqsave(&trustix_datapath_inner_gso_probation_locks[set],
+			  flags);
+	slot = trustix_datapath_inner_gso_probation_get_locked(
+		&key, frame->flow_id, frame->epoch, set, now, true);
+	if (slot) {
+		slot->first_claim = 0;
+		slot->claims_since_success = 0;
+		slot->last_success = now;
+		trustix_datapath_inner_gso_probation_successes++;
+	}
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_probation_locks[set], flags);
+}
+
+static void trustix_datapath_inner_gso_probation_record_claim(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, __u64 flow_id, __u64 epoch)
+{
+	struct trustix_datapath_inner_gso_probation_slot *slot;
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	unsigned int no_progress_ms;
+	unsigned long first_claim = 0;
+	unsigned long flags;
+	unsigned long now = jiffies;
+	unsigned long no_progress_jiffies;
+	unsigned int set;
+	bool trip = false;
+
+	if (!skb || !outer || !flow_id ||
+	    unlikely(!trustix_datapath_inner_gso_runtime_permitted()))
+		return;
+	no_progress_ms = trustix_datapath_inner_gso_bounded_ms(
+		READ_ONCE(trustix_datapath_inner_gso_no_progress_ms),
+		TRUSTIX_DATAPATH_INNER_GSO_NO_PROGRESS_MS_DEFAULT);
+	no_progress_jiffies = max_t(unsigned long, 1,
+				    msecs_to_jiffies(no_progress_ms));
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&key, skb, outer, target_ifindex);
+	set = trustix_datapath_inner_gso_probation_set(&key, flow_id, epoch);
+	spin_lock_irqsave(&trustix_datapath_inner_gso_probation_locks[set],
+			  flags);
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted()))
+		goto out_unlock;
+	slot = trustix_datapath_inner_gso_probation_get_locked(
+		&key, flow_id, epoch, set, now, true);
+	if (!slot)
+		goto out_unlock;
+	trustix_datapath_inner_gso_probation_claims++;
+	if (slot->last_claim &&
+	    time_after(now, slot->last_claim + no_progress_jiffies)) {
+		slot->first_claim = 0;
+		slot->claims_since_success = 0;
+		trustix_datapath_inner_gso_probation_idle_resets++;
+	}
+	if (!slot->first_claim) {
+		slot->first_claim = now;
+		trustix_datapath_inner_gso_probation_arms++;
+	}
+	if (slot->claims_since_success < UINT_MAX)
+		slot->claims_since_success++;
+	slot->last_claim = now;
+	if (slot->claims_since_success >=
+		    TRUSTIX_DATAPATH_INNER_GSO_PROBATION_MIN_CLAIMS &&
+	    time_after_eq(now, slot->first_claim + no_progress_jiffies)) {
+		first_claim = slot->first_claim;
+		slot->first_claim = 0;
+		slot->claims_since_success = 0;
+		trip = true;
+	}
+
+out_unlock:
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_probation_locks[set], flags);
+	if (trip)
+		trustix_datapath_inner_gso_record_probation_no_progress(
+			first_claim);
+}
+
+static int trustix_datapath_inner_gso_reassembly_insert_range_locked(
+	struct trustix_datapath_inner_gso_reassembly_slot *slot,
+	__u32 start, __u32 end)
+{
+	__u32 merged_start = start;
+	__u32 merged_end = end;
+	__u32 removed_len = 0;
+	unsigned int first = 0;
+	unsigned int last;
+	unsigned int removed;
+
+	if (!slot || !slot->active || start >= end || end > slot->wire_len ||
+	    slot->range_count >
+		    TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_MAX_RANGES)
+		return -EINVAL;
+	while (first < slot->range_count &&
+	       slot->ranges[first].end < start)
+		first++;
+	last = first;
+	while (last < slot->range_count &&
+	       slot->ranges[last].start <= merged_end) {
+		merged_start = min(merged_start, slot->ranges[last].start);
+		merged_end = max(merged_end, slot->ranges[last].end);
+		removed_len += slot->ranges[last].end -
+			       slot->ranges[last].start;
+		last++;
+	}
+	removed = last - first;
+	if (!removed) {
+		if (slot->range_count >=
+		    TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_MAX_RANGES)
+			return -ENOSPC;
+		memmove(&slot->ranges[first + 1], &slot->ranges[first],
+			(slot->range_count - first) * sizeof(slot->ranges[0]));
+		slot->range_count++;
+	} else {
+		memmove(&slot->ranges[first + 1], &slot->ranges[last],
+			(slot->range_count - last) * sizeof(slot->ranges[0]));
+		slot->range_count = slot->range_count - removed + 1;
+	}
+	slot->ranges[first].start = merged_start;
+	slot->ranges[first].end = merged_end;
+	slot->received_len = slot->received_len - removed_len +
+			     merged_end - merged_start;
+	slot->buffered_len = slot->range_count && !slot->ranges[0].start ?
+			     slot->ranges[0].end : 0;
+	slot->next_seq = slot->start_seq + slot->buffered_len;
+	return 0;
+}
+
+static int trustix_datapath_tix_tcp_payload_info(
+	const struct sk_buff *skb, __u8 ip_header_len, __u8 l4_header_len,
+	__u32 *payload_offset, __u32 *payload_len, __u32 *sequence)
+{
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	int network_offset;
+	__u32 total_len;
+
+	if (!skb || !payload_offset || !payload_len || !sequence ||
+	    ip_header_len != sizeof(*iph) || l4_header_len != sizeof(*tcph))
+		return -EINVAL;
+	network_offset = skb_network_offset(skb);
+	if (network_offset < 0 || (__u32)network_offset > skb->len ||
+	    skb->len - (__u32)network_offset < ip_header_len + l4_header_len)
+		return -EMSGSIZE;
+	iph = ip_hdr(skb);
+	if (!iph || iph->protocol != IPPROTO_TCP)
+		return -EPROTONOSUPPORT;
+	total_len = ntohs(iph->tot_len);
+	if (total_len < ip_header_len + l4_header_len ||
+	    total_len > skb->len - (__u32)network_offset)
+		return -EMSGSIZE;
+	tcph = (const struct tcphdr *)(skb_network_header(skb) +
+					 ip_header_len);
+	if (tcph->syn || tcph->fin || tcph->rst)
+		return -EPROTONOSUPPORT;
+	*payload_offset = (__u32)network_offset + ip_header_len +
+			  l4_header_len;
+	*payload_len = total_len - ip_header_len - l4_header_len;
+	*sequence = ntohl(tcph->seq);
+	return *payload_len ? 0 : -ENODATA;
+}
+
+static int trustix_datapath_inner_gso_reassembly_start(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, __u32 frame_offset, __u32 available_len,
+	const struct trustix_datapath_tixt_frame *frame, __u32 frame_sequence,
+	bool account_timeout_faults)
+{
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	struct trustix_datapath_inner_gso_reassembly_slot *duplicate = NULL;
+	struct trustix_datapath_inner_gso_reassembly_slot *empty = NULL;
+	unsigned long flags;
+	unsigned int set;
+	unsigned int first;
+	unsigned int i;
+	unsigned int active = 0;
+	unsigned int expired_faults = 0;
+	unsigned long expired_oldest_progress = 0;
+	int ret = 0;
+
+	if (!skb || !outer || !frame ||
+	    frame->header_len < TRUSTIX_DATAPATH_MIN_FRAME_HEADER_LEN ||
+	    !frame->wire_len ||
+	    frame->wire_len > TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_FRAME_MAX ||
+	    available_len < frame->header_len ||
+	    available_len >= frame->wire_len || frame_offset > skb->len ||
+	    available_len > skb->len - frame_offset)
+		return -EINVAL;
+	if (!READ_ONCE(trustix_datapath_inner_gso_reassembly_data)) {
+		trustix_datapath_rx_worker_inner_gso_oom++;
+		return -ENOMEM;
+	}
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted()))
+		return -EAGAIN;
+
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&key, skb, outer, target_ifindex);
+	set = trustix_datapath_inner_gso_reassembly_set(&key);
+	first = set * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+	spin_lock_irqsave(&trustix_datapath_inner_gso_reassembly_locks[set],
+			  flags);
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted())) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[first + i];
+
+		if (slot->active && time_after_eq(jiffies, slot->expires)) {
+			unsigned long progress =
+				trustix_datapath_inner_gso_reassembly_expire_locked(
+					slot, true, false);
+
+			if (progress &&
+			    (!expired_oldest_progress ||
+			     time_before(progress, expired_oldest_progress)))
+				expired_oldest_progress = progress;
+			expired_faults++;
+		}
+		if (slot->active &&
+		    trustix_datapath_inner_gso_reassembly_key_equal(
+			    &slot->key, &key) &&
+		    slot->flow_id == frame->flow_id &&
+		    slot->epoch == frame->epoch &&
+		    slot->start_seq == frame_sequence && !duplicate)
+			duplicate = slot;
+		if (slot->active)
+			active++;
+		else if (!empty)
+			empty = slot;
+	}
+	if (duplicate) {
+		trustix_datapath_rx_worker_inner_gso_duplicate_starts++;
+		if (!duplicate->data || !duplicate->wire_len ||
+		    duplicate->wire_len != frame->wire_len ||
+		    duplicate->received_len >= duplicate->wire_len) {
+			ret = -EBADMSG;
+			goto out_unlock;
+		}
+		if (skb_copy_bits(skb, frame_offset, duplicate->data,
+				  available_len)) {
+			ret = -ENODATA;
+			goto out_unlock;
+		}
+		ret = trustix_datapath_inner_gso_reassembly_insert_range_locked(
+			duplicate, 0, available_len);
+		if (ret)
+			goto out_unlock;
+		duplicate->expires =
+			trustix_datapath_inner_gso_reassembly_deadline();
+		goto out_unlock;
+	}
+	if (!empty) {
+		trustix_datapath_rx_worker_inner_gso_collisions++;
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
+	if (!empty->data) {
+		trustix_datapath_rx_worker_inner_gso_oom++;
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+	if (skb_copy_bits(skb, frame_offset, empty->data, available_len)) {
+		ret = -ENODATA;
+		goto out_unlock;
+	}
+	empty->active = true;
+	empty->flow_id = frame->flow_id;
+	empty->epoch = frame->epoch;
+	empty->key = key;
+	empty->start_seq = frame_sequence;
+	empty->next_seq = frame_sequence + available_len;
+	empty->wire_len = frame->wire_len;
+	empty->buffered_len = available_len;
+	empty->received_len = available_len;
+	empty->range_count = 1;
+	empty->ranges[0].start = 0;
+	empty->ranges[0].end = available_len;
+	empty->expires = trustix_datapath_inner_gso_reassembly_deadline();
+	empty->stream_last_progress = jiffies;
+	trustix_datapath_rx_worker_inner_gso_reassembly_started++;
+	if (active + 1 >
+	    trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark)
+		trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark =
+			active + 1;
+
+out_unlock:
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_reassembly_locks[set], flags);
+	if (account_timeout_faults) {
+		while (expired_faults) {
+			expired_faults--;
+			trustix_datapath_inner_gso_record_reassembly_timeout(
+				expired_oldest_progress);
+		}
+	}
+	return ret;
+}
+
+static int trustix_datapath_inner_gso_reassembly_start_live(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	int target_ifindex, __u32 frame_offset, __u32 available_len,
+	const struct trustix_datapath_tixt_frame *frame, __u32 frame_sequence,
+	bool account_timeout_faults)
+{
+	struct trustix_datapath_state_slot *session = NULL;
+	int ret;
+
+	if (!frame)
+		return -EINVAL;
+	/*
+	 * Keep session replacement and slot admission in state -> reassembly
+	 * lock order. This closes the race where an old frame could enter after
+	 * the updater had already cleared that session's stale slots.
+	 */
+	read_lock_bh(&trustix_datapath_state_lock);
+	ret = trustix_datapath_plaintext_session_for_frame_locked(
+		frame->flow_id, frame->epoch, IPPROTO_TCP, &session);
+	if (ret || !(session->flags &
+		     TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO)) {
+		ret = -EAGAIN;
+		goto out_state_unlock;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		skb, outer, target_ifindex, frame_offset, available_len, frame,
+		frame_sequence, account_timeout_faults);
+
+out_state_unlock:
+	read_unlock_bh(&trustix_datapath_state_lock);
+	return ret;
+}
+
+static int trustix_datapath_inner_gso_reassembly_append(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
 	__u8 ip_header_len, __u8 l4_header_len, int target_ifindex,
-	struct net_device *target_dev_hint, bool *candidate,
+	struct sk_buff **completed_skb, __u32 *tail_offset, __u32 *tail_len,
+	bool account_timeout_faults)
+{
+	struct trustix_datapath_inner_gso_reassembly_key key;
+	struct trustix_datapath_inner_gso_reassembly_slot *matched = NULL;
+	struct sk_buff *completed = NULL;
+	unsigned long flags;
+	unsigned int set;
+	unsigned int first;
+	unsigned int i;
+	__u32 payload_offset;
+	__u32 payload_len;
+	__u32 sequence;
+	__u32 append_len;
+	__u32 matched_offset = 0;
+	__s32 closest_delta = 0;
+	bool matched_expired = false;
+	bool tuple_active = false;
+	bool have_closest_delta = false;
+	unsigned int expired_faults = 0;
+	unsigned long expired_oldest_progress = 0;
+	int ret;
+
+	if (completed_skb)
+		*completed_skb = NULL;
+	if (tail_offset)
+		*tail_offset = 0;
+	if (tail_len)
+		*tail_len = 0;
+	if (!skb || !outer || !completed_skb || !tail_offset || !tail_len)
+		return -EINVAL;
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted()))
+		return -EAGAIN;
+	ret = trustix_datapath_tix_tcp_payload_info(
+		skb, ip_header_len, l4_header_len, &payload_offset,
+		&payload_len, &sequence);
+	if (ret)
+		return ret;
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&key, skb, outer, target_ifindex);
+	set = trustix_datapath_inner_gso_reassembly_set(&key);
+	first = set * TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+	spin_lock_irqsave(&trustix_datapath_inner_gso_reassembly_locks[set],
+			  flags);
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted())) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[first + i];
+
+		if (!slot->active ||
+		    !trustix_datapath_inner_gso_reassembly_key_equal(
+			    &slot->key, &key))
+			continue;
+		if (time_after_eq(jiffies, slot->expires)) {
+			unsigned long progress;
+
+			if (sequence - slot->start_seq < slot->wire_len)
+				matched_expired = true;
+			progress =
+				trustix_datapath_inner_gso_reassembly_expire_locked(
+					slot, false, false);
+			if (progress &&
+			    (!expired_oldest_progress ||
+			     time_before(progress, expired_oldest_progress)))
+				expired_oldest_progress = progress;
+			expired_faults++;
+			continue;
+		}
+		tuple_active = true;
+		{
+			__s32 delta = (__s32)(sequence - slot->next_seq);
+			__s64 magnitude = delta < 0 ? -(__s64)delta : delta;
+			__s64 closest_magnitude =
+				closest_delta < 0 ? -(__s64)closest_delta :
+						    closest_delta;
+
+			if (!have_closest_delta || magnitude < closest_magnitude) {
+				closest_delta = delta;
+				have_closest_delta = true;
+			}
+		}
+		if (sequence - slot->start_seq < slot->wire_len && !matched) {
+			matched = slot;
+			matched_offset = sequence - slot->start_seq;
+			break;
+		}
+	}
+	if (!matched) {
+		trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+		if (matched_expired) {
+			trustix_datapath_rx_worker_inner_gso_continuation_orphans++;
+			ret = -ETIMEDOUT;
+		} else if (tuple_active) {
+			trustix_datapath_rx_worker_inner_gso_sequence_gaps++;
+			trustix_datapath_rx_worker_inner_gso_last_sequence_gap =
+				closest_delta;
+			if (closest_delta < 0)
+				trustix_datapath_rx_worker_inner_gso_sequence_gap_behind++;
+			else
+				trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead++;
+			ret = -EILSEQ;
+		} else {
+			trustix_datapath_rx_worker_inner_gso_continuation_orphans++;
+			ret = -ENOENT;
+		}
+		goto out_unlock;
+	}
+	if (!matched->data || !matched->wire_len ||
+	    matched->received_len >= matched->wire_len ||
+	    !matched->range_count) {
+		trustix_datapath_inner_gso_reassembly_reset_locked(matched);
+		trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+	append_len = min(payload_len, matched->wire_len - matched_offset);
+	if (skb_copy_bits(skb, payload_offset,
+			  matched->data + matched_offset, append_len)) {
+		trustix_datapath_inner_gso_reassembly_reset_locked(matched);
+		trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+		ret = -ENODATA;
+		goto out_unlock;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_insert_range_locked(
+		matched, matched_offset, matched_offset + append_len);
+	if (ret) {
+		trustix_datapath_inner_gso_reassembly_reset_locked(matched);
+		trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+		goto out_unlock;
+	}
+	matched->expires = trustix_datapath_inner_gso_reassembly_deadline();
+	trustix_datapath_rx_worker_inner_gso_continuation_matched++;
+	*tail_len = payload_len - append_len;
+	if (*tail_len)
+		*tail_offset = payload_offset + append_len;
+	if (matched->received_len < matched->wire_len) {
+		ret = 0;
+		goto out_unlock;
+	}
+	completed = alloc_skb(matched->wire_len, GFP_ATOMIC);
+	if (!completed) {
+		trustix_datapath_rx_worker_inner_gso_oom++;
+		trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+		trustix_datapath_inner_gso_reassembly_reset_locked(matched);
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+	skb_put_data(completed, matched->data, matched->wire_len);
+	trustix_datapath_inner_gso_reassembly_reset_locked(matched);
+	*completed_skb = completed;
+	ret = 0;
+
+out_unlock:
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_reassembly_locks[set], flags);
+	if (account_timeout_faults) {
+		while (expired_faults) {
+			expired_faults--;
+			trustix_datapath_inner_gso_record_reassembly_timeout(
+				expired_oldest_progress);
+		}
+	}
+	return ret;
+}
+
+static int trustix_datapath_rx_worker_process_tixt_frame(
+	struct sk_buff *frame_skb, struct sk_buff *queue_source_skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	struct net_device *target_dev, __u32 frame_offset,
+	const struct trustix_datapath_tixt_frame *frame,
+	struct trustix_datapath_rx_validation_cache *validation_cache,
 	unsigned int *queued_frames)
 {
-	struct trustix_datapath_rx_validation_cache validation_cache = {};
 	struct trustix_datapath_rx_stage_view view = {};
 	struct trustix_datapath_ioc_classify inner = {};
-	struct net_device *target_dev = NULL;
 	struct sk_buff *inner_skb = NULL;
 	__u8 inner_header[sizeof(struct iphdr) + 60];
 	__u8 inner_ip_header_len = 0;
 	__u8 inner_l4_header_len = 0;
-	__u32 network_offset;
-	__u32 total_len;
-	__u32 tixt_offset;
-	__u32 tixt_len;
+	__u8 *regular_packet = NULL;
 	__u32 inner_offset;
 	__u32 copy_len;
+	unsigned int represented_frames = 1;
+	unsigned int queued = 0;
+	bool inner_gso;
 	int ret;
+
+	if (queued_frames)
+		*queued_frames = 0;
+	if (!frame_skb || !outer || !target_dev || !frame ||
+	    !validation_cache || !queued_frames || !frame->wire_len ||
+	    frame_offset > frame_skb->len ||
+	    frame->wire_len > frame_skb->len - frame_offset ||
+	    frame->payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
+	    check_add_overflow(frame_offset, (__u32)frame->header_len,
+			       &inner_offset) ||
+	    inner_offset > frame_skb->len ||
+	    frame->payload_len > frame_skb->len - inner_offset)
+		return -EMSGSIZE;
+	inner_gso = frame->flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO;
+	copy_len = min_t(__u32, frame->payload_len, sizeof(inner_header));
+	if (skb_copy_bits(frame_skb, inner_offset, inner_header, copy_len))
+		return -ENODATA;
+	ret = trustix_datapath_parse_ipv4_packet(
+		inner_header, frame->payload_len, &inner,
+		&inner_ip_header_len, &inner_l4_header_len);
+	if (ret)
+		return ret;
+	view.frame = *frame;
+	view.inner = inner;
+	view.inner_packet = inner_header;
+	view.tixt_len = frame->wire_len;
+	view.inner_offset = inner_offset;
+	view.inner_ip_header_len = inner_ip_header_len;
+	view.inner_l4_header_len = inner_l4_header_len;
+	ret = trustix_datapath_rx_stage_validate_batch(
+		outer, &view, validation_cache);
+	if (ret)
+		return ret;
+
+	if (inner_gso) {
+		represented_frames = frame->fragment_count;
+		ret = trustix_datapath_rx_worker_build_inner_gso_skb(
+			frame_skb, inner_offset, frame, target_dev, &inner_skb);
+		if (ret)
+			goto out;
+		ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(
+			inner_skb, target_dev);
+		if (ret)
+			goto out;
+	} else {
+		regular_packet = kmalloc(frame->payload_len, GFP_ATOMIC);
+		if (!regular_packet) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		if (skb_copy_bits(frame_skb, inner_offset, regular_packet,
+				  frame->payload_len)) {
+			ret = -ENODATA;
+			goto out;
+		}
+		ret = trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
+			target_dev, regular_packet, frame->payload_len,
+			frame->flags, &inner_skb);
+		if (ret)
+			goto out;
+	}
+	ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+		queue_source_skb, target_dev, &inner_skb, inner_skb->len,
+		represented_frames, &queued);
+	if (ret || !queued) {
+		if (!ret)
+			ret = -EIO;
+		goto out;
+	}
+	*queued_frames = queued;
+	if (inner_gso) {
+		trustix_datapath_rx_worker_inner_gso_packets++;
+		trustix_datapath_rx_worker_inner_gso_segments +=
+			frame->fragment_count;
+		trustix_datapath_inner_gso_reassembly_record_progress(
+			queue_source_skb, outer, target_dev->ifindex, frame);
+	} else {
+		trustix_datapath_rx_worker_inner_gso_regular_frames++;
+	}
+
+out:
+	kfree(regular_packet);
+	kfree_skb(inner_skb);
+	return ret;
+}
+
+static int trustix_datapath_rx_worker_try_inner_gso(
+	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
+	__u8 ip_header_len, __u8 l4_header_len, int target_ifindex,
+	struct net_device *target_dev_hint, __u8 tcp_shard,
+	bool enforce_session_state, bool *candidate, unsigned int *queued_frames)
+{
+	struct trustix_datapath_rx_validation_cache validation_cache = {};
+	struct trustix_datapath_tixt_frame partial_frame = {};
+	struct net_device *target_dev = NULL;
+	__u32 tixt_offset;
+	__u32 tixt_len;
+	__u32 cursor_offset;
+	__u32 remaining;
+	__u32 tcp_sequence;
+	unsigned int complete_frames = 0;
+	unsigned int inner_frames = 0;
+	unsigned int queued_total = 0;
+	bool has_inner_gso = false;
+	bool partial = false;
+	bool stored_partial = false;
+	int ret = 0;
 
 	if (candidate)
 		*candidate = false;
@@ -12871,68 +14888,77 @@ static int trustix_datapath_rx_worker_try_inner_gso(
 	    outer->protocol != IPPROTO_TCP || ip_header_len != 20 ||
 	    l4_header_len != 20)
 		return -EOPNOTSUPP;
-	network_offset = skb_network_offset(skb);
-	if (network_offset > skb->len ||
-	    skb->len - network_offset < ip_header_len + l4_header_len)
-		return -EMSGSIZE;
-	total_len = ntohs(ip_hdr(skb)->tot_len);
-	tixt_offset = network_offset + ip_header_len + l4_header_len;
-	if (total_len < ip_header_len + l4_header_len ||
-	    total_len > skb->len - network_offset)
-		return -EMSGSIZE;
-	tixt_len = total_len - ip_header_len - l4_header_len;
-	ret = trustix_datapath_parse_tixt_skb_header(
-		skb, tixt_offset, tixt_len, &view.frame);
+	ret = trustix_datapath_tix_tcp_payload_info(
+		skb, ip_header_len, l4_header_len, &tixt_offset, &tixt_len,
+		&tcp_sequence);
 	if (ret)
 		return ret;
-	if (!(view.frame.flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO))
+
+	/*
+	 * GRO may concatenate adjacent outer GSO packets. Scan the complete
+	 * TIX stream first so a regular frame followed by inner-GSO (or the
+	 * reverse transition) is consumed by one path instead of being treated
+	 * as malformed trailing bytes.
+	 */
+	cursor_offset = tixt_offset;
+	remaining = tixt_len;
+	while (remaining) {
+		struct trustix_datapath_tixt_frame frame = {};
+
+		if (complete_frames + (partial ? 1U : 0U) >=
+		    TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES)
+			return has_inner_gso ? -E2BIG : -EOPNOTSUPP;
+		ret = trustix_datapath_parse_tixt_skb_header(
+			skb, cursor_offset, remaining, &frame);
+		if (ret)
+			return has_inner_gso ? ret : -EOPNOTSUPP;
+		if (frame.flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO) {
+			has_inner_gso = true;
+			inner_frames++;
+		}
+		if (!frame.wire_len ||
+		    frame.payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN)
+			return has_inner_gso ? -EMSGSIZE : -EOPNOTSUPP;
+		if (frame.wire_len > remaining) {
+			partial = true;
+			partial_frame = frame;
+			break;
+		}
+		cursor_offset += frame.wire_len;
+		remaining -= frame.wire_len;
+		complete_frames++;
+	}
+	if (!has_inner_gso)
 		return -EOPNOTSUPP;
 	*candidate = true;
-	trustix_datapath_rx_worker_inner_gso_candidates++;
-	if (view.frame.wire_len > tixt_len) {
+	trustix_datapath_rx_worker_inner_gso_candidates += inner_frames;
+	if (unlikely(!trustix_datapath_inner_gso_runtime_permitted()))
+		return -EAGAIN;
+	if (partial)
 		trustix_datapath_rx_worker_inner_gso_partial_frames++;
-		return -EMSGSIZE;
+	if (complete_frames > 1) {
+		trustix_datapath_rx_worker_inner_gso_stream_packets++;
+		trustix_datapath_rx_worker_inner_gso_stream_frames +=
+			complete_frames;
 	}
-	if (view.frame.wire_len < tixt_len ||
-	    view.frame.payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
-		trustix_datapath_rx_worker_inner_gso_malformed++;
-		return -EMSGSIZE;
-	}
-	if (check_add_overflow(tixt_offset, (__u32)view.frame.header_len,
-			       &inner_offset) ||
-	    inner_offset > skb->len ||
-	    view.frame.payload_len > skb->len - inner_offset) {
-		trustix_datapath_rx_worker_inner_gso_malformed++;
-		return -EMSGSIZE;
-	}
-	copy_len = min_t(__u32, view.frame.payload_len,
-			 sizeof(inner_header));
-	if (skb_copy_bits(skb, inner_offset, inner_header, copy_len)) {
-		trustix_datapath_rx_worker_inner_gso_errors++;
-		return -ENODATA;
-	}
-	ret = trustix_datapath_parse_ipv4_packet(
-		inner_header, view.frame.payload_len, &inner,
-		&inner_ip_header_len, &inner_l4_header_len);
-	if (ret) {
-		trustix_datapath_rx_worker_inner_gso_malformed++;
-		return ret;
-	}
-	view.inner = inner;
-	view.inner_packet = inner_header;
-	view.tixt_len = view.frame.wire_len;
-	view.inner_offset = inner_offset;
-	view.inner_ip_header_len = inner_ip_header_len;
-	view.inner_l4_header_len = inner_l4_header_len;
-	ret = trustix_datapath_rx_stage_validate_batch(
-		outer, &view, &validation_cache);
-	if (ret) {
-		if (ret == -EBADMSG || ret == -EINVAL ||
-		    ret == -EPROTONOSUPPORT || ret == -EMSGSIZE)
-			trustix_datapath_rx_worker_inner_gso_malformed++;
+	if (!complete_frames && partial) {
+		if (!tcp_shard)
+			return -EMSGSIZE;
+		if (enforce_session_state)
+			ret = trustix_datapath_inner_gso_reassembly_start_live(
+				skb, outer, target_ifindex, cursor_offset,
+				remaining, &partial_frame,
+				tcp_sequence + (cursor_offset - tixt_offset), true);
 		else
+			ret = trustix_datapath_inner_gso_reassembly_start(
+				skb, outer, target_ifindex, cursor_offset,
+				remaining, &partial_frame,
+				tcp_sequence + (cursor_offset - tixt_offset), false);
+		if (ret) {
 			trustix_datapath_rx_worker_inner_gso_errors++;
-		return ret;
+			return ret;
+		}
+		return 0;
 	}
 	ret = trustix_datapath_rx_worker_target_dev_hint(
 		skb, &target_dev, target_ifindex, target_dev_hint);
@@ -12945,39 +14971,217 @@ static int trustix_datapath_rx_worker_try_inner_gso(
 		ret = -ENETDOWN;
 		goto out;
 	}
-	ret = trustix_datapath_rx_worker_build_inner_gso_skb(
-		skb, inner_offset, &view.frame, target_dev, &inner_skb);
-	if (ret) {
-		if (ret == -EINVAL || ret == -EPROTONOSUPPORT ||
-		    ret == -EMSGSIZE)
+
+	cursor_offset = tixt_offset;
+	remaining = tixt_len;
+	while (complete_frames) {
+		struct trustix_datapath_tixt_frame frame = {};
+		unsigned int frame_queued = 0;
+
+		ret = trustix_datapath_parse_tixt_skb_header(
+			skb, cursor_offset, remaining, &frame);
+		if (ret)
+			goto frame_error;
+		if (!frame.wire_len || frame.wire_len > remaining) {
+			ret = -EMSGSIZE;
+			goto frame_error;
+		}
+		ret = trustix_datapath_rx_worker_process_tixt_frame(
+			skb, skb, outer, target_dev, cursor_offset, &frame,
+			&validation_cache, &frame_queued);
+		if (ret)
+			goto frame_error;
+		queued_total += frame_queued;
+		cursor_offset += frame.wire_len;
+		remaining -= frame.wire_len;
+		complete_frames--;
+		continue;
+
+frame_error:
+		if (ret == -EBADMSG || ret == -EINVAL ||
+		    ret == -EPROTONOSUPPORT || ret == -EMSGSIZE)
 			trustix_datapath_rx_worker_inner_gso_malformed++;
 		else
 			trustix_datapath_rx_worker_inner_gso_errors++;
 		goto out;
 	}
-	ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(inner_skb,
-						       target_dev);
-	if (ret) {
-		trustix_datapath_rx_worker_inner_gso_errors++;
-		goto out;
+	if (partial) {
+		if (!tcp_shard) {
+			ret = -EMSGSIZE;
+			goto out;
+		}
+		if (enforce_session_state)
+			ret = trustix_datapath_inner_gso_reassembly_start_live(
+				skb, outer, target_ifindex, cursor_offset,
+				remaining, &partial_frame,
+				tcp_sequence + (cursor_offset - tixt_offset), true);
+		else
+			ret = trustix_datapath_inner_gso_reassembly_start(
+				skb, outer, target_ifindex, cursor_offset,
+				remaining, &partial_frame,
+				tcp_sequence + (cursor_offset - tixt_offset), false);
+		if (ret) {
+			trustix_datapath_rx_worker_inner_gso_errors++;
+			goto out;
+		}
+		stored_partial = true;
 	}
-	ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
-		skb, target_dev, &inner_skb, inner_skb->len,
-		view.frame.fragment_count, queued_frames);
-	if (ret) {
-		trustix_datapath_rx_worker_inner_gso_errors++;
-	} else if (!*queued_frames) {
+	if (!queued_total && !stored_partial) {
 		trustix_datapath_rx_worker_inner_gso_errors++;
 		ret = -EIO;
-	} else {
-		trustix_datapath_rx_worker_inner_gso_packets++;
-		trustix_datapath_rx_worker_inner_gso_segments +=
-			view.frame.fragment_count;
+		goto out;
 	}
-	out:
-	kfree_skb(inner_skb);
+	*queued_frames = queued_total;
+	ret = 0;
+out:
+	if (queued_total)
+		*queued_frames = queued_total;
 	if (target_dev)
 		dev_put(target_dev);
+	return ret;
+}
+
+static int trustix_datapath_rx_worker_consume_inner_gso_continuation(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *outer,
+	__u8 ip_header_len, __u8 l4_header_len, int target_ifindex,
+	struct net_device *target_dev_hint, unsigned int *queued_frames)
+{
+	struct trustix_datapath_rx_validation_cache validation_cache = {};
+	struct trustix_datapath_tixt_frame frame = {};
+	struct net_device *target_dev = NULL;
+	struct sk_buff *completed_skb = NULL;
+	__u32 payload_offset;
+	__u32 payload_len;
+	__u32 tcp_sequence;
+	__u32 tail_offset = 0;
+	__u32 tail_len = 0;
+	__u32 cursor_offset;
+	__u32 remaining;
+	unsigned int queued_total = 0;
+	unsigned int tail_frames = 0;
+	int ret;
+
+	if (queued_frames)
+		*queued_frames = 0;
+	if (!skb || !outer || !queued_frames)
+		return -EINVAL;
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		skb, outer, ip_header_len, l4_header_len, target_ifindex,
+		&completed_skb, &tail_offset, &tail_len, true);
+	if (ret)
+		return ret;
+	if (!completed_skb && !tail_len)
+		return 0;
+	ret = trustix_datapath_tix_tcp_payload_info(
+		skb, ip_header_len, l4_header_len, &payload_offset,
+		&payload_len, &tcp_sequence);
+	if (ret)
+		goto error;
+	if (completed_skb) {
+		ret = trustix_datapath_parse_tixt_skb_header(
+			completed_skb, 0, completed_skb->len, &frame);
+		if (ret || frame.wire_len != completed_skb->len) {
+			ret = ret ?: -EMSGSIZE;
+			goto malformed;
+		}
+	}
+	ret = trustix_datapath_rx_worker_target_dev_hint(
+		skb, &target_dev, target_ifindex, target_dev_hint);
+	if (ret)
+		goto error;
+	if (!trustix_datapath_rx_worker_dev_ready(target_dev)) {
+		ret = -ENETDOWN;
+		goto error;
+	}
+	if (completed_skb) {
+		unsigned int queued = 0;
+
+		ret = trustix_datapath_rx_worker_process_tixt_frame(
+			completed_skb, skb, outer, target_dev, 0, &frame,
+			&validation_cache, &queued);
+		if (ret)
+			goto frame_error;
+		queued_total += queued;
+		trustix_datapath_rx_worker_inner_gso_reassembly_completed++;
+		trustix_datapath_inner_gso_record_reassembly_success();
+	}
+
+	cursor_offset = tail_offset;
+	remaining = tail_len;
+	while (remaining) {
+		unsigned int queued = 0;
+
+		if (tail_frames >=
+		    TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES) {
+			ret = -E2BIG;
+			goto malformed;
+		}
+		memset(&frame, 0, sizeof(frame));
+		ret = trustix_datapath_parse_tixt_skb_header(
+			skb, cursor_offset, remaining, &frame);
+		if (ret)
+			goto malformed;
+		if (!frame.wire_len ||
+		    frame.payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
+			ret = -EMSGSIZE;
+			goto malformed;
+		}
+		if (frame.flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO)
+			trustix_datapath_rx_worker_inner_gso_candidates++;
+		if (frame.wire_len > remaining) {
+			trustix_datapath_rx_worker_inner_gso_partial_frames++;
+			ret = trustix_datapath_inner_gso_reassembly_start_live(
+				skb, outer, target_ifindex, cursor_offset,
+				remaining, &frame,
+				tcp_sequence +
+					(cursor_offset - payload_offset),
+				true);
+			if (ret)
+				goto frame_error;
+			remaining = 0;
+			break;
+		}
+		ret = trustix_datapath_rx_worker_process_tixt_frame(
+			skb, skb, outer, target_dev, cursor_offset, &frame,
+			&validation_cache, &queued);
+		if (ret)
+			goto frame_error;
+		queued_total += queued;
+		tail_frames++;
+		cursor_offset += frame.wire_len;
+		remaining -= frame.wire_len;
+	}
+	if (tail_frames) {
+		trustix_datapath_rx_worker_inner_gso_tail_frames += tail_frames;
+		trustix_datapath_rx_worker_inner_gso_stream_packets++;
+		trustix_datapath_rx_worker_inner_gso_stream_frames +=
+			tail_frames + (completed_skb ? 1 : 0);
+	}
+	*queued_frames = queued_total;
+	ret = 0;
+	goto out;
+
+malformed:
+	trustix_datapath_rx_worker_inner_gso_malformed++;
+	goto drop;
+frame_error:
+	if (ret == -EBADMSG || ret == -EINVAL ||
+	    ret == -EPROTONOSUPPORT || ret == -EMSGSIZE)
+		trustix_datapath_rx_worker_inner_gso_malformed++;
+	else
+		trustix_datapath_rx_worker_inner_gso_errors++;
+	goto drop;
+error:
+	trustix_datapath_rx_worker_inner_gso_errors++;
+drop:
+	trustix_datapath_rx_worker_inner_gso_continuation_drops++;
+out:
+	if (queued_total)
+		*queued_frames = queued_total;
+	if (target_dev)
+		dev_put(target_dev);
+	kfree_skb(completed_skb);
 	return ret;
 }
 
@@ -13451,7 +15655,8 @@ trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 
 	switch (outer_protocol) {
 	case IPPROTO_UDP:
-		return (__u16)(mixed % txq_count);
+		subset_count = (txq_count + 1) / 2;
+		return (__u16)((mixed % subset_count) * 2);
 	case IPPROTO_TCP:
 		subset_count = txq_count / 2;
 		return (__u16)((mixed % subset_count) * 2 + 1);
@@ -19096,6 +21301,98 @@ trustix_datapath_rx_stage_apply(struct trustix_datapath_ioc_rx_stage *request,
 	return ret;
 }
 
+static bool trustix_datapath_tix_tcp_synthetic_marker(
+	const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *classify,
+	__u8 ip_header_len, __u8 l4_header_len)
+{
+	const struct tcphdr *tcph;
+	const __u8 *network;
+	__u32 total_len;
+
+	if (!skb || !classify || classify->protocol != IPPROTO_TCP ||
+	    ip_header_len != sizeof(struct iphdr) ||
+	    l4_header_len != sizeof(struct tcphdr))
+		return false;
+	network = skb_network_header(skb);
+	if (!network)
+		return false;
+	total_len = trustix_datapath_get_be16(network + 2);
+	if (total_len <= ip_header_len + l4_header_len)
+		return false;
+	tcph = (const struct tcphdr *)(network + ip_header_len);
+	return tcph->ack && !tcph->syn && !tcph->fin && !tcph->rst &&
+	       tcph->ack_seq == 0;
+}
+
+static bool trustix_datapath_claim_plaintext_tix_tcp_skb(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *classify,
+	__u8 ip_header_len, __u8 l4_header_len, bool frame_magic,
+	__u32 *session_flags, bool *continuation, __u8 *shard_out,
+	__u64 *flow_id_out, __u64 *epoch_out)
+{
+	struct trustix_datapath_state_slot *session;
+	struct trustix_datapath_state_slot *wire;
+	bool marker;
+	bool reverse = false;
+	bool matched_reverse = false;
+	bool claimed = false;
+	__u8 shard = 0;
+
+	if (session_flags)
+		*session_flags = 0;
+	if (continuation)
+		*continuation = false;
+	if (shard_out)
+		*shard_out = 0;
+	if (flow_id_out)
+		*flow_id_out = 0;
+	if (epoch_out)
+		*epoch_out = 0;
+	if (!skb || !classify || classify->protocol != IPPROTO_TCP ||
+	    ip_header_len != sizeof(struct iphdr) ||
+	    l4_header_len != sizeof(struct tcphdr) ||
+	    ntohs(ip_hdr(skb)->tot_len) <= ip_header_len + l4_header_len)
+		return false;
+	marker = trustix_datapath_tix_tcp_synthetic_marker(
+		skb, classify, ip_header_len, l4_header_len);
+
+	read_lock_bh(&trustix_datapath_state_lock);
+	wire = trustix_datapath_session_wire_for_tuple_any_flow_locked(
+		classify->src_ipv4, classify->dst_ipv4,
+		classify->src_port, classify->dst_port, IPPROTO_TCP,
+		&reverse);
+	if (!wire || !reverse)
+		goto out;
+	session = trustix_datapath_session_for_flow_id_locked(wire->value[0]);
+	if (!session || !(session->flags &
+			 TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW) ||
+	    !trustix_datapath_session_wire_tuple_matches_locked(
+		    wire, session, classify->src_ipv4, classify->dst_ipv4,
+		    classify->src_port, classify->dst_port,
+		    &matched_reverse, &shard) || !matched_reverse)
+		goto out;
+
+	/* New senders reserve shard zero for the real control connection. */
+	claimed = shard || marker || frame_magic;
+	if (!claimed)
+		goto out;
+	if (session_flags)
+		*session_flags = session->flags;
+	if (continuation)
+		*continuation = !frame_magic;
+	if (shard_out)
+		*shard_out = shard;
+	if (flow_id_out)
+		*flow_id_out = session->value[0];
+	if (epoch_out)
+		*epoch_out = session->value[2];
+out:
+	read_unlock_bh(&trustix_datapath_state_lock);
+	return claimed;
+}
+
 static int
 trustix_datapath_outer_pull_skb(struct sk_buff *skb,
 				const struct trustix_datapath_ioc_classify *classify,
@@ -19376,13 +21673,21 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	struct net_device *target_dev_hint;
 	__u8 ip_header_len = 0;
 	__u8 l4_header_len = 0;
+	__u8 plaintext_rx_shard = 0;
 	int target_ifindex;
 	int outer_ret = -EPROTONOSUPPORT;
 	int secure_rx_ret = -EOPNOTSUPP;
 	int worker_ret = -EPROTONOSUPPORT;
 	int tx_ret = -EPROTONOSUPPORT;
+	__u64 plaintext_rx_flow_id = 0;
+	__u64 plaintext_rx_epoch = 0;
+	__u32 plaintext_rx_session_flags = 0;
 	__u32 hook_flags;
 	bool outer_candidate = false;
+	bool plaintext_rx_claimed = false;
+	bool plaintext_rx_continuation = false;
+	bool plaintext_rx_delivered = false;
+	bool plaintext_rx_failed = false;
 	bool rx_prepared = false;
 	bool secure_rx_claimed = false;
 	bool rx_preview = false;
@@ -19460,13 +21765,50 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 		outer_ret = trustix_datapath_outer_pull_skb(
 			skb, &classify, ip_header_len, l4_header_len);
 		outer_candidate = outer_ret != -EPROTONOSUPPORT;
+		if (rx_worker && classify.protocol == IPPROTO_TCP &&
+		    !(hook_flags &
+		      TRUSTIX_DATAPATH_HOOK_FLAG_RX_SECURE_TIX_TCP_ONLY)) {
+			plaintext_rx_claimed =
+				trustix_datapath_claim_plaintext_tix_tcp_skb(
+					skb, &classify, ip_header_len,
+					l4_header_len, !outer_ret,
+					&plaintext_rx_session_flags,
+					&plaintext_rx_continuation,
+					&plaintext_rx_shard,
+					&plaintext_rx_flow_id,
+					&plaintext_rx_epoch);
+		}
+		if (plaintext_rx_claimed && plaintext_rx_continuation &&
+		    plaintext_rx_shard &&
+		    (plaintext_rx_session_flags &
+		     TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO) &&
+		    !(plaintext_rx_session_flags &
+		      TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED)) {
+			trustix_datapath_inner_gso_probation_record_claim(
+				skb, &classify, target_ifindex,
+				plaintext_rx_flow_id, plaintext_rx_epoch);
+			worker_inner_gso_candidate = true;
+			outer_candidate = true;
+			worker_ret =
+				trustix_datapath_rx_worker_consume_inner_gso_continuation(
+					skb, &classify, ip_header_len,
+					l4_header_len, target_ifindex,
+					target_dev_hint,
+					&worker_stream_frames);
+			if (!worker_ret) {
+				outer_ret = 0;
+				worker_stream_queued = true;
+			} else {
+				outer_ret = worker_ret;
+			}
+		}
 		if (outer_candidate)
 			trustix_datapath_debug_record_outer(1, outer_ret,
 							    worker_ret, skb,
 							    &classify,
 							    ip_header_len,
 							    l4_header_len);
-		if (!outer_ret && rx_worker &&
+		if (!outer_ret && rx_worker && !worker_stream_queued &&
 		    classify.protocol == IPPROTO_TCP) {
 			secure_rx_ret =
 				trustix_datapath_secure_rx_preprocess_skb(
@@ -19493,6 +21835,7 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 			worker_ret = trustix_datapath_rx_worker_try_inner_gso(
 				skb, &classify, ip_header_len, l4_header_len,
 				target_ifindex, target_dev_hint,
+				plaintext_rx_shard, true,
 				&worker_inner_gso_candidate,
 				&worker_stream_frames);
 			if (worker_inner_gso_candidate) {
@@ -19566,6 +21909,20 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 				(rx_worker && rx_prepared && !worker_ret);
 		if (worker_stream_queued)
 			worker_queued = true;
+		plaintext_rx_delivered = worker_stream_queued ||
+			(worker_inner_gso_candidate && !worker_ret) ||
+			(rx_worker && rx_prepared && !worker_ret);
+		plaintext_rx_failed = plaintext_rx_claimed &&
+				      !secure_rx_claimed &&
+				      !plaintext_rx_delivered;
+		if (plaintext_rx_failed)
+			trustix_datapath_rx_worker_tix_tcp_claimed_drops++;
+		if (trustix_datapath_inner_gso_error_trips_circuit(worker_ret) &&
+		    ((plaintext_rx_failed &&
+		     (plaintext_rx_session_flags &
+		      TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO)) ||
+		     (worker_inner_gso_candidate && worker_ret)))
+			trustix_datapath_inner_gso_record_runtime_fault();
 	}
 
 	if (worker_queued &&
@@ -19621,8 +21978,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 		/* The RX worker already owns the packet; avoid a second route lookup. */
 		ret = 0;
 		hook->classified++;
-	} else if (secure_rx_claimed) {
-		/* Secure ciphertext is either consumed by the worker or dropped. */
+	} else if (secure_rx_claimed || plaintext_rx_claimed) {
+		/* Claimed tunnel data is either consumed by the worker or dropped. */
 		ret = outer_ret ?: worker_ret;
 		if (!ret)
 			ret = -EIO;
@@ -19638,7 +21995,7 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 								&classify,
 								ret);
 	}
-	if (worker_queued || secure_rx_claimed) {
+	if (worker_queued || secure_rx_claimed || plaintext_rx_claimed) {
 		hook->drop++;
 		if (worker_queued && worker_stream_frames > 1)
 			hook->rx_worker += worker_stream_frames - 1;
@@ -19679,6 +22036,8 @@ hook_accounted:
 	if (worker_inline_stolen)
 		return NF_STOLEN;
 	if (secure_rx_claimed)
+		worker_queued = true;
+	if (plaintext_rx_claimed)
 		worker_queued = true;
 	return worker_queued ? NF_DROP : NF_ACCEPT;
 }
@@ -19903,6 +22262,29 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_inner_gso_partial_frames = 0;
 	trustix_datapath_rx_worker_inner_gso_malformed = 0;
 	trustix_datapath_rx_worker_inner_gso_errors = 0;
+	trustix_datapath_rx_worker_inner_gso_stream_packets = 0;
+	trustix_datapath_rx_worker_inner_gso_stream_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_regular_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_drops = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_started = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_completed = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_matched = 0;
+	trustix_datapath_rx_worker_inner_gso_continuation_orphans = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gaps = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead = 0;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_behind = 0;
+	trustix_datapath_rx_worker_inner_gso_last_sequence_gap = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_start = 0;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_append = 0;
+	trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes = 0;
+	trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes = 0;
+	trustix_datapath_rx_worker_inner_gso_duplicate_starts = 0;
+	trustix_datapath_rx_worker_inner_gso_collisions = 0;
+	trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark = 0;
+	trustix_datapath_rx_worker_inner_gso_oom = 0;
+	trustix_datapath_rx_worker_inner_gso_tail_frames = 0;
+	trustix_datapath_rx_worker_tix_tcp_claimed_drops = 0;
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks = 0;
 	trustix_datapath_rx_worker_partial_checksum_metadata_repairs = 0;
 	trustix_datapath_rx_worker_dst_mac_hits = 0;
@@ -20064,6 +22446,9 @@ trustix_datapath_hook_reset_counters_locked(
 		&trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets);
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits = 0;
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_tix_tcp_ordered_xmits);
+	trustix_datapath_tx_plaintext_tix_tcp_sequence_assign_errors = 0;
 	trustix_datapath_rx_tix_tcp_port_shard_matches = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_fallbacks = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_q0 = 0;
@@ -21049,6 +23434,9 @@ restore:
 static int trustix_datapath_selftest_tix_tcp_shard_sequences(void)
 {
 	struct trustix_datapath_tx_plan plan = {};
+	struct sk_buff *skb = NULL;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
 	atomic64_t *sequences = READ_ONCE(
 		trustix_datapath_outer_tcp_shard_sequences);
 	__u64 saved_features = READ_ONCE(trustix_datapath_features);
@@ -21058,8 +23446,12 @@ static int trustix_datapath_selftest_tix_tcp_shard_sequences(void)
 		trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks;
 	__s64 saved_first;
 	__s64 saved_second;
+	__sum16 partial_check;
+	__u8 *packet;
 	__u32 first_index = 3;
 	__u32 second_index = TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS + 3;
+	__u32 outer_len = sizeof(*iph) + sizeof(*tcph) + 64;
+	unsigned int i;
 	int ret = 0;
 
 	if (!sequences ||
@@ -21083,10 +23475,59 @@ static int trustix_datapath_selftest_tix_tcp_shard_sequences(void)
 		goto restore;
 	}
 	plan.outer_tcp_sequence_flow_slot = 1;
-	if (trustix_datapath_tx_outer_tcp_next_seq(&plan, 75) != 2000)
+	if (trustix_datapath_tx_outer_tcp_next_seq(&plan, 75) != 2000) {
 		ret = -EINVAL;
+		goto restore;
+	}
+
+	/* Final sequence assignment must also repair a software checksum. */
+	skb = alloc_skb(outer_len, GFP_KERNEL);
+	if (!skb) {
+		ret = -ENOMEM;
+		goto restore;
+	}
+	packet = skb_put(skb, outer_len);
+	memset(packet, 0, outer_len);
+	trustix_datapath_build_outer_ipv4(packet, outer_len, IPPROTO_TCP,
+					 0xc0000201U, 0xc6336402U);
+	trustix_datapath_put_be16(packet + sizeof(*iph), 12345);
+	trustix_datapath_put_be16(packet + sizeof(*iph) + 2, 443);
+	packet[sizeof(*iph) + 12] = 0x50;
+	packet[sizeof(*iph) + 13] = 0x18;
+	trustix_datapath_put_be16(packet + sizeof(*iph) + 14, 65535);
+	for (i = sizeof(*iph) + sizeof(*tcph); i < outer_len; i++)
+		packet[i] = (__u8)(i * 17U + 3U);
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, sizeof(*iph));
+	iph = ip_hdr(skb);
+	tcph = tcp_hdr(skb);
+	tcph->check = trustix_datapath_rx_worker_l4_checksum(
+		iph, tcph, outer_len - sizeof(*iph), IPPROTO_TCP);
+	skb->ip_summed = CHECKSUM_NONE;
+	plan.outer_tcp_sequence_flow_slot = 0;
+	atomic64_set(&sequences[first_index], 3000);
+	ret = trustix_datapath_tx_assign_outer_tcp_sequence(skb, &plan);
+	if (ret || ntohl(tcph->seq) != 3000 ||
+	    trustix_datapath_rx_worker_l4_checksum(
+		    iph, tcph, outer_len - sizeof(*iph), IPPROTO_TCP)) {
+		ret = ret ?: -EINVAL;
+		goto restore;
+	}
+
+	/* CHECKSUM_PARTIAL stores only the pseudo-header seed. */
+	tcph->seq = 0;
+	tcph->check = ~csum_tcpudp_magic(
+		iph->saddr, iph->daddr, outer_len - sizeof(*iph),
+		IPPROTO_TCP, 0);
+	partial_check = tcph->check;
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	atomic64_set(&sequences[first_index], 4000);
+	ret = trustix_datapath_tx_assign_outer_tcp_sequence(skb, &plan);
+	if (ret || ntohl(tcph->seq) != 4000 || tcph->check != partial_check)
+		ret = ret ?: -EINVAL;
 
 restore:
+	kfree_skb(skb);
 	atomic64_set(&sequences[first_index], saved_first);
 	atomic64_set(&sequences[second_index], saved_second);
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits = saved_hits;
@@ -21099,7 +23540,7 @@ restore:
 static int trustix_datapath_selftest_session_wire(void)
 {
 	static const __u16 parallel_tcp_ports[] = {
-		48500, 48502, 48510, 48518,
+		48500, 48501, 48503, 48504,
 	};
 	struct trustix_datapath_state_table table = {};
 	struct trustix_datapath_ioc_classify classify = {
@@ -21135,6 +23576,8 @@ static int trustix_datapath_selftest_session_wire(void)
 		classify.src_port = parallel_tcp_ports[i];
 		shard = trustix_datapath_tix_tcp_port_shard_for_hash(
 			trustix_datapath_inner_flow_hash(&classify));
+		if (!shard)
+			return -EINVAL;
 		shard_mask |= BIT(shard);
 	}
 	if (hweight16(shard_mask) != ARRAY_SIZE(parallel_tcp_ports))
@@ -21876,20 +24319,20 @@ static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
 			return -EINVAL;
 		seen_unpartitioned |= (__u16)(1U << queue);
 	}
-	if (seen_partitioned_udp != 0x0f || seen_partitioned_tcp != 0x0a ||
+	if (seen_partitioned_udp != 0x05 || seen_partitioned_tcp != 0x0a ||
 	    seen_unpartitioned != 0x0f)
 		return -EINVAL;
 	for (i = 0; i < 128; i++) {
 		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 			i, 2, IPPROTO_UDP, true);
-		if (queue >= 2 ||
+		if (queue != 0 ||
 		    trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 			    i, 2, IPPROTO_TCP, true) != 1)
 			return -EINVAL;
 
 		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 			i, 3, IPPROTO_UDP, true);
-		if (queue >= 3)
+		if (queue >= 3 || (queue & 1))
 			return -EINVAL;
 		if (trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 			    i, 3, IPPROTO_TCP, true) != 1)
@@ -22442,6 +24885,44 @@ out:
 	return ret;
 }
 
+static struct sk_buff *
+trustix_datapath_selftest_tix_tcp_segment(const struct sk_buff *source,
+					  __u32 source_offset,
+					  __u32 payload_len,
+					  __u32 sequence_delta)
+{
+	const __u32 outer_header_len =
+		sizeof(struct iphdr) + sizeof(struct tcphdr);
+	struct sk_buff *skb;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+
+	if (!source || source_offset < outer_header_len ||
+	    source_offset > source->len ||
+	    payload_len > source->len - source_offset ||
+	    payload_len > U16_MAX - outer_header_len)
+		return NULL;
+	skb = alloc_skb(outer_header_len + payload_len, GFP_KERNEL);
+	if (!skb)
+		return NULL;
+	if (skb_copy_bits(source, 0, skb_put(skb, outer_header_len),
+			  outer_header_len) ||
+	    skb_copy_bits(source, source_offset,
+			  skb_put(skb, payload_len), payload_len)) {
+		kfree_skb(skb);
+		return NULL;
+	}
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, sizeof(struct iphdr));
+	iph = ip_hdr(skb);
+	tcph = tcp_hdr(skb);
+	iph->tot_len = htons((__u16)skb->len);
+	tcph->seq = htonl(ntohl(tcph->seq) + sequence_delta);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+		iph, sizeof(*iph));
+	return skb;
+}
+
 static int trustix_datapath_selftest_inner_gso(void)
 {
 	const __u32 payload_len = 3000;
@@ -22454,11 +24935,17 @@ static int trustix_datapath_selftest_inner_gso(void)
 	struct trustix_datapath_rx_stage_view view = {};
 	struct trustix_datapath_ioc_classify outer = {};
 	struct trustix_datapath_tixt_frame frame = {};
+	struct trustix_datapath_tixt_frame scoped_frame = {};
+	struct trustix_datapath_tixt_frame tail_frame = {};
+	struct trustix_datapath_inner_gso_reassembly_key reassembly_key;
 	struct trustix_datapath_tx_plan plan = {};
 	struct net_device *test_dev = NULL;
 	struct sk_buff *inner_skb = NULL;
 	struct sk_buff *outer_skb = NULL;
+	struct sk_buff *stream_outer_skb = NULL;
 	struct sk_buff *partial_outer_skb = NULL;
+	struct sk_buff *continuation_skb = NULL;
+	struct sk_buff *reassembled_skb = NULL;
 	struct sk_buff *restored_skb = NULL;
 	struct sk_buff *split_outer_skb = NULL;
 	struct skb_shared_info *shinfo;
@@ -22471,6 +24958,7 @@ static int trustix_datapath_selftest_inner_gso(void)
 	__u8 wire[TRUSTIX_DATAPATH_TIXT_HEADER_LEN];
 	__u8 header[sizeof(struct iphdr) + 60];
 	__u8 sample[32];
+	__u8 sample_expected[32];
 	__u64 saved_features = READ_ONCE(trustix_datapath_features);
 	__u64 saved_partial_frames =
 		trustix_datapath_rx_worker_inner_tcp_checksum_partial;
@@ -22480,17 +24968,178 @@ static int trustix_datapath_selftest_inner_gso(void)
 		trustix_datapath_rx_worker_inner_gso_candidates;
 	__u64 saved_inner_gso_partial_frames =
 		trustix_datapath_rx_worker_inner_gso_partial_frames;
+	__u64 saved_reassembly_started =
+		trustix_datapath_rx_worker_inner_gso_reassembly_started;
+	__u64 saved_continuation_matched =
+		trustix_datapath_rx_worker_inner_gso_continuation_matched;
+	__u64 saved_continuation_orphans =
+		trustix_datapath_rx_worker_inner_gso_continuation_orphans;
+	__u64 saved_continuation_drops =
+		trustix_datapath_rx_worker_inner_gso_continuation_drops;
+	__u64 saved_session_clears =
+		trustix_datapath_rx_worker_inner_gso_session_clears;
+	__u64 saved_session_slots_cleared =
+		trustix_datapath_rx_worker_inner_gso_session_slots_cleared;
+	__u64 saved_sequence_gaps =
+		trustix_datapath_rx_worker_inner_gso_sequence_gaps;
+	__u64 saved_sequence_gap_ahead =
+		trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead;
+	__u64 saved_sequence_gap_behind =
+		trustix_datapath_rx_worker_inner_gso_sequence_gap_behind;
+	int saved_last_sequence_gap =
+		trustix_datapath_rx_worker_inner_gso_last_sequence_gap;
+	__u64 saved_reassembly_timeouts =
+		trustix_datapath_rx_worker_inner_gso_timeouts;
+	__u64 saved_timeouts_on_start =
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_start;
+	__u64 saved_timeouts_on_append =
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_append;
+	__u64 saved_timeouts_on_sweep =
+		trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep;
+	__u64 saved_timeout_missing_bytes =
+		trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes;
+	__u64 saved_timeout_max_missing_bytes =
+		trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes;
+	__u64 saved_duplicate_starts =
+		trustix_datapath_rx_worker_inner_gso_duplicate_starts;
+	__u64 saved_collisions =
+		trustix_datapath_rx_worker_inner_gso_collisions;
+	__u64 saved_reassembly_high_watermark =
+		trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark;
+	__u64 concurrent_started;
+	__u64 concurrent_matched;
+	__u64 capacity_collisions;
+	__u64 out_of_order_matched;
 	unsigned int gso_segs = 0;
 	unsigned int queued_frames = 0;
+	unsigned int scoped_active = 0;
 	unsigned int i;
+	unsigned int reassembly_set;
+	unsigned long reassembly_flags;
+	unsigned long circuit_flags;
+	unsigned long saved_circuit_until;
+	unsigned long saved_fault_window_start;
+	unsigned long saved_timeout_window_start;
+	unsigned long saved_last_recovery;
+	unsigned int saved_fault_window_count;
+	unsigned int saved_timeout_window_count;
+	unsigned int saved_timeout_success_credit;
+	unsigned int saved_timeout_last_ratio_ppm;
+	unsigned int saved_backoff_level;
+	unsigned int saved_last_cooldown_ms;
+	unsigned long long saved_runtime_faults;
+	unsigned long long saved_circuit_trips;
+	unsigned long long saved_timeout_circuit_trips;
+	unsigned long long saved_timeout_ratio_suppressions;
+	unsigned long long saved_no_progress_circuit_trips;
+	unsigned long long saved_circuit_recoveries;
+	unsigned long long saved_probation_arms;
+	unsigned long long saved_probation_claims;
+	unsigned long long saved_probation_successes;
+	unsigned long long saved_probation_failures;
+	unsigned long long saved_probation_idle_resets;
+	unsigned long long saved_probation_evictions;
+	unsigned long long saved_probation_collisions;
+	unsigned int saved_last_no_progress_ms;
+	bool saved_auto_recover;
+	bool saved_circuit_open;
+	bool saved_circuit_recovering;
+	bool reassembly_found;
+	__u32 continuation_payload_len;
+	__u32 first_continuation_len;
+	__u32 first_frame_sequence;
+	__u32 second_frame_sequence;
+	__u32 tail_offset = 0;
+	__u32 tail_len = 0;
 	__u32 split_head_len = inner_offset - 16;
 	__u32 split_frag_len;
 	bool candidate = false;
 	int ret = 0;
 
+	if (trustix_datapath_inner_gso_error_trips_circuit(0) ||
+	    trustix_datapath_inner_gso_error_trips_circuit(-ETIMEDOUT) ||
+	    trustix_datapath_inner_gso_error_trips_circuit(-ENOENT) ||
+	    trustix_datapath_inner_gso_error_trips_circuit(-EILSEQ) ||
+	    trustix_datapath_inner_gso_error_trips_circuit(-EAGAIN) ||
+	    !trustix_datapath_inner_gso_error_trips_circuit(-ENOMEM))
+		return -EINVAL;
+	{
+		unsigned int observed_ratio = 0;
+
+		if (trustix_datapath_inner_gso_timeout_success_credit_cap(
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_THRESHOLD_DEFAULT,
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT) !=
+			    1280U ||
+		    trustix_datapath_inner_gso_timeout_ratio_trips(
+			    64, 1280,
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT,
+			    &observed_ratio) ||
+		    observed_ratio >=
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT ||
+		    !trustix_datapath_inner_gso_timeout_ratio_trips(
+			    64, 80,
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT,
+			    &observed_ratio) ||
+		    observed_ratio <
+			    TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT ||
+		    !trustix_datapath_inner_gso_timeout_ratio_trips(
+			    64, 1280, 0, &observed_ratio))
+			return -EINVAL;
+	}
+
 	test_dev = kzalloc(sizeof(*test_dev), GFP_KERNEL);
 	if (!test_dev)
 		return -ENOMEM;
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock,
+			  circuit_flags);
+	saved_circuit_open = trustix_datapath_inner_gso_circuit_open;
+	saved_circuit_recovering =
+		trustix_datapath_inner_gso_circuit_recovering;
+	saved_circuit_until = trustix_datapath_inner_gso_circuit_until;
+	saved_fault_window_start =
+		trustix_datapath_inner_gso_fault_window_start;
+	saved_timeout_window_start =
+		trustix_datapath_inner_gso_timeout_window_start;
+	saved_last_recovery = trustix_datapath_inner_gso_last_recovery;
+	saved_fault_window_count =
+		trustix_datapath_inner_gso_fault_window_count;
+	saved_timeout_window_count =
+		trustix_datapath_inner_gso_timeout_window_count;
+	saved_timeout_success_credit =
+		trustix_datapath_inner_gso_timeout_success_credit;
+	saved_timeout_last_ratio_ppm =
+		trustix_datapath_inner_gso_timeout_last_ratio_ppm;
+	saved_backoff_level = trustix_datapath_inner_gso_backoff_level;
+	saved_last_cooldown_ms =
+		trustix_datapath_inner_gso_last_cooldown_ms;
+	saved_runtime_faults = trustix_datapath_inner_gso_runtime_faults;
+	saved_circuit_trips = trustix_datapath_inner_gso_circuit_trips;
+	saved_timeout_circuit_trips =
+		trustix_datapath_inner_gso_timeout_circuit_trips;
+	saved_timeout_ratio_suppressions =
+		trustix_datapath_inner_gso_timeout_ratio_suppressions;
+	saved_no_progress_circuit_trips =
+		trustix_datapath_inner_gso_no_progress_circuit_trips;
+	saved_circuit_recoveries =
+		trustix_datapath_inner_gso_circuit_recoveries;
+	saved_probation_arms = trustix_datapath_inner_gso_probation_arms;
+	saved_probation_claims = trustix_datapath_inner_gso_probation_claims;
+	saved_probation_successes =
+		trustix_datapath_inner_gso_probation_successes;
+	saved_probation_failures =
+		trustix_datapath_inner_gso_probation_failures;
+	saved_probation_idle_resets =
+		trustix_datapath_inner_gso_probation_idle_resets;
+	saved_probation_evictions =
+		trustix_datapath_inner_gso_probation_evictions;
+	saved_probation_collisions =
+		trustix_datapath_inner_gso_probation_collisions;
+	saved_last_no_progress_ms =
+		trustix_datapath_inner_gso_last_no_progress_ms;
+	saved_auto_recover =
+		READ_ONCE(trustix_datapath_inner_gso_auto_recover);
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock,
+			       circuit_flags);
 	test_dev->type = ARPHRD_ETHER;
 	test_dev->mtu = 1500;
 	test_dev->features = NETIF_F_TSO | NETIF_F_HW_CSUM;
@@ -22603,6 +25252,29 @@ static int trustix_datapath_selftest_inner_gso(void)
 		ret = ret ?: -EINVAL;
 		goto out;
 	}
+	stream_outer_skb = alloc_skb(sizeof(struct iphdr) +
+					    sizeof(struct tcphdr) +
+					    frame.wire_len * 2, GFP_KERNEL);
+	if (!stream_outer_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	if (skb_copy_bits(outer_skb, 0,
+			  skb_put(stream_outer_skb, outer_skb->len),
+			  outer_skb->len) ||
+	    skb_copy_bits(outer_skb,
+			  sizeof(struct iphdr) + sizeof(struct tcphdr),
+			  skb_put(stream_outer_skb, frame.wire_len),
+			  frame.wire_len)) {
+		ret = -ENODATA;
+		goto out;
+	}
+	skb_reset_network_header(stream_outer_skb);
+	skb_set_transport_header(stream_outer_skb, sizeof(struct iphdr));
+	outer_iph = ip_hdr(stream_outer_skb);
+	outer_iph->tot_len = htons((__u16)stream_outer_skb->len);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+		outer_iph, sizeof(*outer_iph));
 	partial_outer_skb = skb_clone(outer_skb, GFP_KERNEL);
 	if (!partial_outer_skb) {
 		ret = -ENOMEM;
@@ -22621,15 +25293,770 @@ static int trustix_datapath_selftest_inner_gso(void)
 	outer.protocol = IPPROTO_TCP;
 	ret = trustix_datapath_rx_worker_try_inner_gso(
 		partial_outer_skb, &outer, sizeof(struct iphdr),
-		sizeof(struct tcphdr), 0, NULL, &candidate, &queued_frames);
-	if (ret != -EMSGSIZE || !candidate || queued_frames ||
+		sizeof(struct tcphdr), 0, NULL, 1, false, &candidate,
+		&queued_frames);
+	if (ret || !candidate || queued_frames ||
 	    trustix_datapath_rx_worker_inner_gso_candidates !=
 		    saved_inner_gso_candidates + 1 ||
 	    trustix_datapath_rx_worker_inner_gso_partial_frames !=
-		    saved_inner_gso_partial_frames + 1) {
+		    saved_inner_gso_partial_frames + 1 ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_started !=
+		    saved_reassembly_started + 1) {
 		ret = -EINVAL;
 		goto out;
 	}
+	continuation_payload_len =
+		outer_skb->len - partial_outer_skb->len;
+	first_continuation_len =
+		min_t(__u32, 800, continuation_payload_len - 1);
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, first_continuation_len,
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || reassembled_skb || tail_offset || tail_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    saved_continuation_matched + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(continuation_skb);
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len + first_continuation_len,
+		continuation_payload_len - first_continuation_len,
+		partial_outer_skb->len -
+				(sizeof(struct iphdr) + sizeof(struct tcphdr)) +
+			first_continuation_len);
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || !reassembled_skb || tail_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    saved_continuation_matched + 2 ||
+	    reassembled_skb->len != frame.wire_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	for (i = 0; i < reassembled_skb->len; i += sizeof(sample)) {
+		__u32 compare_len =
+			min_t(__u32, sizeof(sample), reassembled_skb->len - i);
+
+		if (skb_copy_bits(reassembled_skb, i, sample, compare_len) ||
+		    skb_copy_bits(outer_skb,
+				  sizeof(struct iphdr) +
+					  sizeof(struct tcphdr) + i,
+				  sample_expected, compare_len) ||
+		    memcmp(sample, sample_expected, compare_len)) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+	kfree_skb(reassembled_skb);
+	reassembled_skb = NULL;
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
+	/* Fill a one-byte sequence gap after the later range arrives first. */
+	trustix_datapath_clear_inner_gso_reassembly();
+
+	candidate = false;
+	queued_frames = 0;
+	ret = trustix_datapath_rx_worker_try_inner_gso(
+		partial_outer_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, NULL, 1, false, &candidate,
+		&queued_frames);
+	if (ret || !candidate || queued_frames) {
+		ret = -EINVAL;
+		goto out;
+	}
+	out_of_order_matched =
+		trustix_datapath_rx_worker_inner_gso_continuation_matched;
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len + 1,
+		continuation_payload_len - 1,
+		partial_outer_skb->len -
+				(sizeof(struct iphdr) + sizeof(struct tcphdr)) +
+			1);
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || reassembled_skb || tail_offset || tail_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    out_of_order_matched + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(continuation_skb);
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, 1,
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || !reassembled_skb || tail_len ||
+	    reassembled_skb->len != frame.wire_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    out_of_order_matched + 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(reassembled_skb);
+	reassembled_skb = NULL;
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
+
+	/* A continuation outside every active frame remains fail-closed. */
+	candidate = false;
+	queued_frames = 0;
+	ret = trustix_datapath_rx_worker_try_inner_gso(
+		partial_outer_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, NULL, 1, false, &candidate,
+		&queued_frames);
+	if (ret || !candidate || queued_frames) {
+		ret = -EINVAL;
+		goto out;
+	}
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, 1, frame.wire_len + 1);
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret != -EILSEQ || reassembled_skb ||
+	    trustix_datapath_rx_worker_inner_gso_sequence_gaps !=
+		    saved_sequence_gaps + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
+	trustix_datapath_clear_inner_gso_reassembly();
+
+	candidate = false;
+	queued_frames = 0;
+	ret = trustix_datapath_rx_worker_try_inner_gso(
+		partial_outer_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, NULL, 1, false, &candidate,
+		&queued_frames);
+	if (ret || !candidate || queued_frames) {
+		ret = -EINVAL;
+		goto out;
+	}
+	trustix_datapath_inner_gso_reassembly_key_init(
+		&reassembly_key, partial_outer_skb, &outer, 0);
+	reassembly_set =
+		trustix_datapath_inner_gso_reassembly_set(&reassembly_key);
+	reassembly_found = false;
+	spin_lock_irqsave(
+		&trustix_datapath_inner_gso_reassembly_locks[reassembly_set],
+		reassembly_flags);
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[
+				reassembly_set *
+					TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES +
+				i];
+
+		if (!slot->active ||
+		    !trustix_datapath_inner_gso_reassembly_key_equal(
+			    &slot->key, &reassembly_key))
+			continue;
+		slot->expires = jiffies - 1;
+		reassembly_found = true;
+		break;
+	}
+	spin_unlock_irqrestore(
+		&trustix_datapath_inner_gso_reassembly_locks[reassembly_set],
+		reassembly_flags);
+	if (!reassembly_found) {
+		ret = -EINVAL;
+		goto out;
+	}
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, continuation_payload_len,
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret != -ETIMEDOUT || reassembled_skb ||
+	    trustix_datapath_rx_worker_inner_gso_timeouts !=
+		    saved_reassembly_timeouts + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
+	first_frame_sequence = ntohl(tcp_hdr(partial_outer_skb)->seq);
+
+	/*
+	 * One stale partial slot is a packet-loss sample, not proof that the
+	 * receive path stopped. Expiration stays governed by the timeout-burst
+	 * threshold even when that individual stream has gone idle. Active
+	 * continuation traffic without successful delivery is covered by the
+	 * probation test below.
+	 */
+	{
+		unsigned int no_progress_ms =
+			trustix_datapath_inner_gso_bounded_ms(
+				READ_ONCE(
+					trustix_datapath_inner_gso_no_progress_ms),
+				TRUSTIX_DATAPATH_INNER_GSO_NO_PROGRESS_MS_DEFAULT);
+		unsigned long stale_progress =
+			jiffies - max_t(unsigned long, 1,
+				msecs_to_jiffies(no_progress_ms)) - 1;
+		unsigned long long sweep_timeouts =
+			trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep;
+		unsigned long long no_progress_trips =
+			trustix_datapath_inner_gso_no_progress_circuit_trips;
+		unsigned long long circuit_trips =
+			trustix_datapath_inner_gso_circuit_trips;
+
+		ret = trustix_datapath_inner_gso_reassembly_start(
+			partial_outer_skb, &outer, 0,
+			sizeof(struct iphdr) + sizeof(struct tcphdr),
+			partial_outer_skb->len -
+				(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+			&frame, first_frame_sequence, false);
+		if (ret)
+			goto out;
+		trustix_datapath_inner_gso_reassembly_record_progress(
+			partial_outer_skb, &outer, 0, &frame);
+		reassembly_found = false;
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_reassembly_locks[
+				reassembly_set],
+			reassembly_flags);
+		for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		     i++) {
+			struct trustix_datapath_inner_gso_reassembly_slot *slot =
+				&trustix_datapath_inner_gso_reassembly_slots[
+					reassembly_set *
+						TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES +
+					i];
+
+			if (!slot->active || slot->flow_id != frame.flow_id ||
+			    slot->epoch != frame.epoch)
+				continue;
+			slot->expires = jiffies - 1;
+			reassembly_found = true;
+			break;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_reassembly_locks[
+				reassembly_set],
+			reassembly_flags);
+		if (!reassembly_found) {
+			ret = -EINVAL;
+			goto out;
+		}
+		trustix_datapath_sweep_inner_gso_reassembly();
+		if (trustix_datapath_inner_gso_circuit_open ||
+		    trustix_datapath_inner_gso_no_progress_circuit_trips !=
+			    no_progress_trips ||
+		    trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep !=
+			    sweep_timeouts + 1) {
+			ret = -EINVAL;
+			goto out;
+		}
+
+		ret = trustix_datapath_inner_gso_reassembly_start(
+			partial_outer_skb, &outer, 0,
+			sizeof(struct iphdr) + sizeof(struct tcphdr),
+			partial_outer_skb->len -
+				(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+			&frame, first_frame_sequence, false);
+		if (ret)
+			goto out;
+		reassembly_found = false;
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_reassembly_locks[
+				reassembly_set],
+			reassembly_flags);
+		for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES;
+		     i++) {
+			struct trustix_datapath_inner_gso_reassembly_slot *slot =
+				&trustix_datapath_inner_gso_reassembly_slots[
+					reassembly_set *
+						TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_PROBES +
+					i];
+
+			if (!slot->active || slot->flow_id != frame.flow_id ||
+			    slot->epoch != frame.epoch)
+				continue;
+			slot->stream_last_progress = stale_progress;
+			slot->expires = jiffies - 1;
+			reassembly_found = true;
+			break;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_reassembly_locks[
+				reassembly_set],
+			reassembly_flags);
+		if (!reassembly_found) {
+			ret = -EINVAL;
+			goto out;
+		}
+		trustix_datapath_sweep_inner_gso_reassembly();
+		if (trustix_datapath_inner_gso_circuit_open ||
+		    trustix_datapath_inner_gso_no_progress_circuit_trips !=
+			    no_progress_trips ||
+		    trustix_datapath_inner_gso_circuit_trips !=
+			    circuit_trips ||
+		    trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep !=
+			    sweep_timeouts + 2) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+
+	/* Continuation activity without delivery must survive an empty slot set. */
+	{
+		struct trustix_datapath_inner_gso_probation_slot *slot;
+		unsigned int no_progress_ms =
+			trustix_datapath_inner_gso_bounded_ms(
+				READ_ONCE(
+					trustix_datapath_inner_gso_no_progress_ms),
+				TRUSTIX_DATAPATH_INNER_GSO_NO_PROGRESS_MS_DEFAULT);
+		unsigned long stale_claim =
+			jiffies - max_t(unsigned long, 1,
+				msecs_to_jiffies(no_progress_ms)) - 1;
+		unsigned long long probation_arms =
+			trustix_datapath_inner_gso_probation_arms;
+		unsigned long long probation_claims =
+			trustix_datapath_inner_gso_probation_claims;
+		unsigned long long probation_successes =
+			trustix_datapath_inner_gso_probation_successes;
+		unsigned long long probation_failures =
+			trustix_datapath_inner_gso_probation_failures;
+		unsigned long long no_progress_trips =
+			trustix_datapath_inner_gso_no_progress_circuit_trips;
+		unsigned long long circuit_trips =
+			trustix_datapath_inner_gso_circuit_trips;
+		unsigned int probation_set;
+		unsigned long probation_flags;
+
+		trustix_datapath_clear_inner_gso_probation_matching(
+			true, 0, 0);
+		trustix_datapath_inner_gso_probation_record_success(
+			partial_outer_skb, &outer, 0, &frame);
+		trustix_datapath_inner_gso_probation_record_claim(
+			partial_outer_skb, &outer, 0, frame.flow_id,
+			frame.epoch);
+		trustix_datapath_inner_gso_reassembly_key_init(
+			&reassembly_key, partial_outer_skb, &outer, 0);
+		probation_set = trustix_datapath_inner_gso_probation_set(
+			&reassembly_key, frame.flow_id, frame.epoch);
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_probation_locks[
+				probation_set],
+			probation_flags);
+		slot = trustix_datapath_inner_gso_probation_get_locked(
+			&reassembly_key, frame.flow_id, frame.epoch,
+			probation_set, jiffies, false);
+		if (slot) {
+			slot->first_claim = stale_claim;
+			slot->last_claim = jiffies;
+			slot->claims_since_success = 1;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_probation_locks[
+				probation_set],
+			probation_flags);
+		if (!slot) {
+			ret = -EINVAL;
+			goto out;
+		}
+
+		/* A successful delivery cancels an aged observation window. */
+		trustix_datapath_inner_gso_probation_record_success(
+			partial_outer_skb, &outer, 0, &frame);
+		trustix_datapath_inner_gso_probation_record_claim(
+			partial_outer_skb, &outer, 0, frame.flow_id,
+			frame.epoch);
+		if (trustix_datapath_inner_gso_circuit_open ||
+		    trustix_datapath_inner_gso_probation_failures !=
+			    probation_failures) {
+			ret = -EINVAL;
+			goto out;
+		}
+
+		spin_lock_irqsave(
+			&trustix_datapath_inner_gso_probation_locks[
+				probation_set],
+			probation_flags);
+		slot = trustix_datapath_inner_gso_probation_get_locked(
+			&reassembly_key, frame.flow_id, frame.epoch,
+			probation_set, jiffies, false);
+		if (slot) {
+			slot->first_claim = stale_claim;
+			slot->last_claim = jiffies;
+			slot->claims_since_success =
+				TRUSTIX_DATAPATH_INNER_GSO_PROBATION_MIN_CLAIMS - 1;
+		}
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_probation_locks[
+				probation_set],
+			probation_flags);
+		if (!slot) {
+			ret = -EINVAL;
+			goto out;
+		}
+		trustix_datapath_inner_gso_probation_record_claim(
+			partial_outer_skb, &outer, 0, frame.flow_id,
+			frame.epoch);
+		if (!trustix_datapath_inner_gso_circuit_open ||
+		    trustix_datapath_inner_gso_probation_arms <
+			    probation_arms + 2 ||
+		    trustix_datapath_inner_gso_probation_claims <
+			    probation_claims + 3 ||
+		    trustix_datapath_inner_gso_probation_successes !=
+			    probation_successes + 2 ||
+		    trustix_datapath_inner_gso_probation_failures !=
+			    probation_failures + 1 ||
+		    trustix_datapath_inner_gso_no_progress_circuit_trips !=
+			    no_progress_trips + 1 ||
+		    trustix_datapath_inner_gso_circuit_trips !=
+			    circuit_trips + 1 ||
+		    trustix_datapath_inner_gso_last_no_progress_ms <
+			    no_progress_ms) {
+			ret = -EINVAL;
+			goto out;
+		}
+		spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock,
+				  circuit_flags);
+		trustix_datapath_inner_gso_fault_window_start = jiffies;
+		trustix_datapath_inner_gso_fault_window_count = 0;
+		trustix_datapath_inner_gso_timeout_window_start = jiffies;
+		trustix_datapath_inner_gso_timeout_window_count = 0;
+		trustix_datapath_inner_gso_timeout_success_credit = 0;
+		trustix_datapath_inner_gso_circuit_recovering = false;
+		smp_store_release(&trustix_datapath_inner_gso_circuit_open,
+				  false);
+		spin_unlock_irqrestore(
+			&trustix_datapath_inner_gso_circuit_lock, circuit_flags);
+		trustix_datapath_clear_inner_gso_probation_matching(
+			true, 0, 0);
+	}
+
+	/* Complete two partial frames on one tuple in reverse order. */
+	trustix_datapath_clear_inner_gso_reassembly();
+	second_frame_sequence = first_frame_sequence + frame.wire_len;
+	concurrent_started =
+		trustix_datapath_rx_worker_inner_gso_reassembly_started;
+	concurrent_matched =
+		trustix_datapath_rx_worker_inner_gso_continuation_matched;
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame, first_frame_sequence, false);
+	if (ret)
+		goto out;
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame, second_frame_sequence, false);
+	if (ret ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_started !=
+		    concurrent_started + 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	/* Retransmitting a frame head refreshes its slot without displacement. */
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame, first_frame_sequence, false);
+	if (ret ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_started !=
+		    concurrent_started + 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, continuation_payload_len,
+		frame.wire_len + partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || !reassembled_skb || tail_len ||
+	    reassembled_skb->len != frame.wire_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    concurrent_matched + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(reassembled_skb);
+	reassembled_skb = NULL;
+	kfree_skb(continuation_skb);
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		outer_skb, partial_outer_skb->len, continuation_payload_len,
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || !reassembled_skb || tail_len ||
+	    reassembled_skb->len != frame.wire_len ||
+	    trustix_datapath_rx_worker_inner_gso_continuation_matched !=
+		    concurrent_matched + 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(reassembled_skb);
+	reassembled_skb = NULL;
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
+
+	/* Session replacement clears only the retired flow's partial frames. */
+	trustix_datapath_clear_inner_gso_reassembly();
+	concurrent_started =
+		trustix_datapath_rx_worker_inner_gso_reassembly_started;
+	scoped_frame = frame;
+	scoped_frame.flow_id++;
+	scoped_frame.epoch++;
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame, first_frame_sequence, false);
+	if (ret)
+		goto out;
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&scoped_frame, first_frame_sequence, false);
+	if (ret ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_started !=
+		    concurrent_started + 2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	trustix_datapath_clear_inner_gso_reassembly_for_session(
+		frame.flow_id, frame.epoch);
+	scoped_active = 0;
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS; i++) {
+		struct trustix_datapath_inner_gso_reassembly_slot *slot =
+			&trustix_datapath_inner_gso_reassembly_slots[i];
+
+		if (!slot->active)
+			continue;
+		if (slot->flow_id != scoped_frame.flow_id ||
+		    slot->epoch != scoped_frame.epoch) {
+			ret = -EINVAL;
+			goto out;
+		}
+		scoped_active++;
+	}
+	if (scoped_active != 1 ||
+	    trustix_datapath_rx_worker_inner_gso_session_clears !=
+		    saved_session_clears + 1 ||
+	    trustix_datapath_rx_worker_inner_gso_session_slots_cleared !=
+		    saved_session_slots_cleared + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* A full table rejects a new head without displacing active frames. */
+	trustix_datapath_clear_inner_gso_reassembly();
+	concurrent_started =
+		trustix_datapath_rx_worker_inner_gso_reassembly_started;
+	capacity_collisions =
+		trustix_datapath_rx_worker_inner_gso_collisions;
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS; i++) {
+		ret = trustix_datapath_inner_gso_reassembly_start(
+			partial_outer_skb, &outer, 0,
+			sizeof(struct iphdr) + sizeof(struct tcphdr),
+			partial_outer_skb->len -
+				(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+			&frame, first_frame_sequence + i * frame.wire_len,
+			false);
+		if (ret)
+			goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame,
+		first_frame_sequence +
+			TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS *
+				frame.wire_len,
+		false);
+	if (ret != -ENOSPC ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_started !=
+		    concurrent_started +
+			    TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS ||
+	    trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark !=
+		    TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS ||
+	    trustix_datapath_rx_worker_inner_gso_collisions !=
+		    capacity_collisions + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = 0;
+	/* Recovery must discard stale slots before the peer resumes inner-GSO. */
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock,
+			  circuit_flags);
+	trustix_datapath_inner_gso_circuit_open = true;
+	trustix_datapath_inner_gso_circuit_recovering = false;
+	trustix_datapath_inner_gso_circuit_until = jiffies;
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock,
+			       circuit_flags);
+	WRITE_ONCE(trustix_datapath_inner_gso_auto_recover, false);
+	ret = trustix_datapath_inner_gso_reassembly_start(
+		partial_outer_skb, &outer, 0,
+		sizeof(struct iphdr) + sizeof(struct tcphdr),
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)),
+		&frame, first_frame_sequence, false);
+	if (ret != -EAGAIN) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (trustix_datapath_inner_gso_runtime_ready_now() ||
+	    trustix_datapath_inner_gso_circuit_recoveries !=
+		    saved_circuit_recoveries) {
+		ret = -EINVAL;
+		goto out;
+	}
+	WRITE_ONCE(trustix_datapath_inner_gso_auto_recover, true);
+	if (!trustix_datapath_inner_gso_runtime_ready_now() ||
+	    trustix_datapath_inner_gso_circuit_recoveries !=
+		    saved_circuit_recoveries + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	for (i = 0; i < TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS; i++) {
+		if (trustix_datapath_inner_gso_reassembly_slots[i].active) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+
+	/* A later frame may arrive after the current frame's final-byte range. */
+	trustix_datapath_clear_inner_gso_reassembly();
+	candidate = false;
+	queued_frames = 0;
+	ret = trustix_datapath_rx_worker_try_inner_gso(
+		partial_outer_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, NULL, 1, false, &candidate,
+		&queued_frames);
+	if (ret || !candidate || queued_frames ||
+	    partial_outer_skb->len <=
+		    sizeof(struct iphdr) + sizeof(struct tcphdr) ||
+	    partial_outer_skb->len -
+			    (sizeof(struct iphdr) + sizeof(struct tcphdr)) + 1 >=
+		    frame.wire_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	first_continuation_len =
+		partial_outer_skb->len -
+		(sizeof(struct iphdr) + sizeof(struct tcphdr)) + 1;
+	continuation_payload_len = frame.wire_len - first_continuation_len +
+				   frame.wire_len;
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		stream_outer_skb,
+		sizeof(struct iphdr) + sizeof(struct tcphdr) +
+			first_continuation_len,
+		continuation_payload_len, first_continuation_len);
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || reassembled_skb || tail_len != frame.wire_len ||
+	    tail_offset != sizeof(struct iphdr) + sizeof(struct tcphdr) +
+			   frame.wire_len - first_continuation_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = trustix_datapath_parse_tixt_skb_header(
+		continuation_skb, tail_offset, tail_len, &tail_frame);
+	if (ret || tail_frame.wire_len != frame.wire_len ||
+	    tail_frame.flags != frame.flags) {
+		ret = ret ?: -EINVAL;
+		goto out;
+	}
+	kfree_skb(continuation_skb);
+	continuation_skb = trustix_datapath_selftest_tix_tcp_segment(
+		stream_outer_skb,
+		partial_outer_skb->len, 1,
+		partial_outer_skb->len -
+			(sizeof(struct iphdr) + sizeof(struct tcphdr)));
+	if (!continuation_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = trustix_datapath_inner_gso_reassembly_append(
+		continuation_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, &reassembled_skb, &tail_offset,
+		&tail_len, false);
+	if (ret || !reassembled_skb || tail_len ||
+	    reassembled_skb->len != frame.wire_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	kfree_skb(reassembled_skb);
+	reassembled_skb = NULL;
+	kfree_skb(continuation_skb);
+	continuation_skb = NULL;
 	ret = 0;
 	if (skb_copy_bits(outer_skb, inner_offset, header, sizeof(header))) {
 		ret = -ENODATA;
@@ -22716,13 +26143,18 @@ static int trustix_datapath_selftest_inner_gso(void)
 		ret = -EINVAL;
 
 out:
+	trustix_datapath_clear_inner_gso_reassembly();
+	trustix_datapath_clear_inner_gso_probation_matching(true, 0, 0);
 	if (page)
 		__free_page(page);
 	if (split_page)
 		__free_page(split_page);
 	kfree_skb(restored_skb);
+	kfree_skb(reassembled_skb);
+	kfree_skb(continuation_skb);
 	kfree_skb(split_outer_skb);
 	kfree_skb(partial_outer_skb);
+	kfree_skb(stream_outer_skb);
 	kfree_skb(outer_skb);
 	kfree_skb(inner_skb);
 	kfree(test_dev);
@@ -22735,6 +26167,93 @@ out:
 		saved_inner_gso_candidates;
 	trustix_datapath_rx_worker_inner_gso_partial_frames =
 		saved_inner_gso_partial_frames;
+	trustix_datapath_rx_worker_inner_gso_reassembly_started =
+		saved_reassembly_started;
+	trustix_datapath_rx_worker_inner_gso_continuation_matched =
+		saved_continuation_matched;
+	trustix_datapath_rx_worker_inner_gso_continuation_orphans =
+		saved_continuation_orphans;
+	trustix_datapath_rx_worker_inner_gso_continuation_drops =
+		saved_continuation_drops;
+	trustix_datapath_rx_worker_inner_gso_session_clears =
+		saved_session_clears;
+	trustix_datapath_rx_worker_inner_gso_session_slots_cleared =
+		saved_session_slots_cleared;
+	trustix_datapath_rx_worker_inner_gso_sequence_gaps =
+		saved_sequence_gaps;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_ahead =
+		saved_sequence_gap_ahead;
+	trustix_datapath_rx_worker_inner_gso_sequence_gap_behind =
+		saved_sequence_gap_behind;
+	trustix_datapath_rx_worker_inner_gso_last_sequence_gap =
+		saved_last_sequence_gap;
+	trustix_datapath_rx_worker_inner_gso_timeouts =
+		saved_reassembly_timeouts;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_start =
+		saved_timeouts_on_start;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_append =
+		saved_timeouts_on_append;
+	trustix_datapath_rx_worker_inner_gso_timeouts_on_sweep =
+		saved_timeouts_on_sweep;
+	trustix_datapath_rx_worker_inner_gso_timeout_missing_bytes =
+		saved_timeout_missing_bytes;
+	trustix_datapath_rx_worker_inner_gso_timeout_max_missing_bytes =
+		saved_timeout_max_missing_bytes;
+	trustix_datapath_rx_worker_inner_gso_duplicate_starts =
+		saved_duplicate_starts;
+	trustix_datapath_rx_worker_inner_gso_collisions = saved_collisions;
+	trustix_datapath_rx_worker_inner_gso_reassembly_high_watermark =
+		saved_reassembly_high_watermark;
+	spin_lock_irqsave(&trustix_datapath_inner_gso_circuit_lock,
+			  circuit_flags);
+	trustix_datapath_inner_gso_circuit_open = saved_circuit_open;
+	trustix_datapath_inner_gso_circuit_recovering =
+		saved_circuit_recovering;
+	trustix_datapath_inner_gso_circuit_until = saved_circuit_until;
+	trustix_datapath_inner_gso_fault_window_start =
+		saved_fault_window_start;
+	trustix_datapath_inner_gso_timeout_window_start =
+		saved_timeout_window_start;
+	trustix_datapath_inner_gso_last_recovery = saved_last_recovery;
+	trustix_datapath_inner_gso_fault_window_count =
+		saved_fault_window_count;
+	trustix_datapath_inner_gso_timeout_window_count =
+		saved_timeout_window_count;
+	trustix_datapath_inner_gso_timeout_success_credit =
+		saved_timeout_success_credit;
+	trustix_datapath_inner_gso_timeout_last_ratio_ppm =
+		saved_timeout_last_ratio_ppm;
+	trustix_datapath_inner_gso_backoff_level = saved_backoff_level;
+	trustix_datapath_inner_gso_last_cooldown_ms =
+		saved_last_cooldown_ms;
+	trustix_datapath_inner_gso_runtime_faults = saved_runtime_faults;
+	trustix_datapath_inner_gso_circuit_trips = saved_circuit_trips;
+	trustix_datapath_inner_gso_timeout_circuit_trips =
+		saved_timeout_circuit_trips;
+	trustix_datapath_inner_gso_timeout_ratio_suppressions =
+		saved_timeout_ratio_suppressions;
+	trustix_datapath_inner_gso_no_progress_circuit_trips =
+		saved_no_progress_circuit_trips;
+	trustix_datapath_inner_gso_circuit_recoveries =
+		saved_circuit_recoveries;
+	trustix_datapath_inner_gso_probation_arms = saved_probation_arms;
+	trustix_datapath_inner_gso_probation_claims = saved_probation_claims;
+	trustix_datapath_inner_gso_probation_successes =
+		saved_probation_successes;
+	trustix_datapath_inner_gso_probation_failures =
+		saved_probation_failures;
+	trustix_datapath_inner_gso_probation_idle_resets =
+		saved_probation_idle_resets;
+	trustix_datapath_inner_gso_probation_evictions =
+		saved_probation_evictions;
+	trustix_datapath_inner_gso_probation_collisions =
+		saved_probation_collisions;
+	trustix_datapath_inner_gso_last_no_progress_ms =
+		saved_last_no_progress_ms;
+	WRITE_ONCE(trustix_datapath_inner_gso_auto_recover,
+		   saved_auto_recover);
+	spin_unlock_irqrestore(&trustix_datapath_inner_gso_circuit_lock,
+			       circuit_flags);
 	return ret;
 }
 
@@ -23628,8 +27147,11 @@ static int __init trustix_datapath_init(void)
 {
 	__u64 passed = 0;
 	__u64 failed = 0;
+	unsigned int i;
 	int ret;
 
+	for (i = 0; i < TRUSTIX_DATAPATH_OUTER_TCP_ORDER_LOCKS; i++)
+		spin_lock_init(&trustix_datapath_outer_tcp_order_locks[i]);
 	ret = trustix_datapath_alloc_pcpu_hot_stats();
 	if (ret)
 		return ret;

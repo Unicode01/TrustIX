@@ -79,6 +79,12 @@ const (
 	tixTCPStatPortShardingLocal                       = "tix_tcp_port_sharding_local"
 	tixTCPStatPortShardingPeer                        = "tix_tcp_port_sharding_peer"
 	tixTCPStatPortShardingNegotiated                  = "tix_tcp_port_sharding_negotiated"
+	tixTCPStatKernelDatapathReadyLocal                = "tix_tcp_kernel_datapath_ready_local"
+	tixTCPStatKernelDatapathReadyPeer                 = "tix_tcp_kernel_datapath_ready_peer"
+	tixTCPStatKernelDatapathReadyNegotiated           = "tix_tcp_kernel_datapath_ready_negotiated"
+	tixTCPStatCapabilityWithdrawals                   = "tix_tcp_capability_withdrawals"
+	tixTCPStatCapabilityWithdrawalAcks                = "tix_tcp_capability_withdrawal_acks"
+	tixTCPStatCapabilityWithdrawalAckTimeouts         = "tix_tcp_capability_withdrawal_ack_timeouts"
 )
 
 const (
@@ -97,15 +103,30 @@ const (
 	tixTCPCompatControlInitOldLen                 = 14
 	tixTCPCompatControlCapabilitiesType           = 4
 	tixTCPCompatControlCapabilitiesLen            = 14
+	tixTCPCompatControlCapabilityUpdateType       = 5
+	tixTCPCompatControlCapabilityAckType          = 6
+	tixTCPCompatControlCapabilityTransitionLen    = 18
 	tixTCPCompatCapabilityRefreshInterval         = 2 * time.Second
+	tixTCPCompatInnerGSOCapabilityRefreshInterval = 50 * time.Millisecond
+	tixTCPCapabilityAckTimeoutDefault             = 2 * time.Second
+	tixTCPCapabilityWithdrawGraceDefault          = 12 * time.Second
+	tixTCPCapabilityWithdrawLegacyGraceDefault    = 30 * time.Second
+	tixTCPCapabilityTransitionDurationMax         = 5 * time.Minute
 	tixTCPCapabilityInnerTCPChecksumPartial       = uint64(1 << 0)
 	tixTCPCapabilityInnerGSO                      = uint64(1 << 1)
 	tixTCPCapabilityPortSharding                  = uint64(1 << 2)
 	tixTCPCapabilitySecureInnerTCPChecksumPartial = uint64(1 << 3)
-	tixTCPKnownCapabilities                       = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding | tixTCPCapabilitySecureInnerTCPChecksumPartial
+	// KernelDatapathReady is a receive-side commit barrier. A sender must not
+	// use any kernel-only wire feature unless the peer advertises this bit.
+	tixTCPCapabilityKernelDatapathReady = uint64(1 << 4)
+	tixTCPKnownCapabilities             = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding | tixTCPCapabilitySecureInnerTCPChecksumPartial | tixTCPCapabilityKernelDatapathReady
 )
 
-var errTIXTCPCapabilityAdvertisement = errors.New("tix_tcp capability advertisement failed")
+var (
+	errTIXTCPCapabilityAdvertisement = errors.New("tix_tcp capability advertisement failed")
+	errTIXTCPCapabilityCommit        = errors.New("tix_tcp capability state commit failed")
+	errTIXTCPCapabilityReconnect     = errors.New("tix_tcp capability change requires session reconnect")
+)
 
 var (
 	tixTCPCompatControlMagic = [4]byte{'T', 'I', 'X', 'C'}
@@ -330,11 +351,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		var compatControl *stream.Session
 		if primerConn != nil {
 			compatControl = stream.NewSession(primerConn)
-			packets := [][]byte{encodeTIXTCPCompatControlInit(flowID)}
-			if localCapabilities != 0 {
-				packets = append(packets, encodeTIXTCPCompatControlCapabilities(localCapabilities))
-			}
-			if err := compatControl.SendPackets(packets); err != nil {
+			if err := compatControl.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
 				closeErr := tixTCPCleanupError("close compat control", compatControl.Close())
 				var deleteErr error
 				if deleter, ok := transportImpl.provider.(dataplane.TIXTCPFlowDeleter); ok {
@@ -722,13 +739,6 @@ func (listener *listener) acceptCompatPrimers() {
 		sess.fullSecureKernelDatapath = listener.fullSecureKernelDatapath
 		sess.localCapabilities.Store(listener.currentLocalCapabilities())
 		sess.enableCompatPriority()
-		if err := sess.sendCompatCapabilities(); err != nil {
-			transport.ObserveAsyncError("close tix_tcp compat control after capability send failure", control.Close())
-			if deleter, ok := listener.provider.(dataplane.TIXTCPFlowDeleter); ok {
-				transport.ObserveAsyncError("delete tix_tcp flow after capability send failure", deleter.DeleteTIXTCPFlows(context.Background(), []uint64{init.flowID}))
-			}
-			continue
-		}
 		listener.mu.Lock()
 		if existing := listener.sessions[init.flowID]; existing != nil && !existing.isClosed() {
 			listener.mu.Unlock()
@@ -979,8 +989,15 @@ type session struct {
 	localCapabilities           atomic.Uint64
 	peerCapabilities            atomic.Uint64
 	capabilityRefreshFailed     atomic.Bool
+	capabilityUpdateSequence    atomic.Uint32
+	capabilityAckCh             chan tixTCPCapabilityTransition
+	capabilityWithdrawals       atomic.Uint64
+	capabilityWithdrawalAcks    atomic.Uint64
+	capabilityAckTimeouts       atomic.Uint64
+	kernelDatapathReadyMu       sync.Mutex
+	kernelDatapathReady         atomic.Bool
 	kernelDatapathStateHookMu   sync.Mutex
-	kernelDatapathStateHook     func()
+	kernelDatapathStateHook     func() error
 	compatControl               *stream.Session
 	compatPriority              chan []byte
 	compatPriorityWaited        atomic.Bool
@@ -1011,6 +1028,11 @@ type compatStreamSession struct {
 type tixTCPCompatControlInit struct {
 	flowID     uint64
 	sourcePort uint16
+}
+
+type tixTCPCapabilityTransition struct {
+	generation   uint32
+	capabilities uint64
 }
 
 type fragmentAssembly struct {
@@ -1110,6 +1132,7 @@ func newSession(provider dataplane.TIXTCPProvider, subscription dataplane.TIXTCP
 		remoteAddress:             remoteAddress,
 		in:                        make(chan tixTCPPacketBatch, tixTCPSessionBuffer()),
 		closed:                    make(chan struct{}),
+		capabilityAckCh:           make(chan tixTCPCapabilityTransition, 16),
 		cryptoPlacement:           placement,
 		reassemblyMaxAssemblies:   tixTCPReassemblyMaxAssemblies(),
 		configuredFragmentPayload: tixTCPFragmentPayloadSizeForPlacement(placement, false),
@@ -1128,6 +1151,9 @@ func (session *session) sendCompatCapabilities() error {
 		return nil
 	}
 	capabilities := session.localCapabilities.Load() & tixTCPKnownCapabilities
+	if session.kernelDatapathReady.Load() {
+		capabilities |= tixTCPCapabilityKernelDatapathReady
+	}
 	if capabilities == 0 {
 		return nil
 	}
@@ -1147,26 +1173,221 @@ func (session *session) sendCompatCapabilitiesValue(capabilities uint64) error {
 	return nil
 }
 
+func (session *session) nextCapabilityUpdateGeneration() uint32 {
+	generation := session.capabilityUpdateSequence.Add(1)
+	if generation == 0 {
+		generation = session.capabilityUpdateSequence.Add(1)
+	}
+	return generation
+}
+
+func (session *session) sendCompatCapabilityTransition(
+	ctx context.Context, capabilities uint64,
+) (acknowledged, advertised bool, resultErr error) {
+	if session == nil || session.compatControl == nil {
+		return false, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	capabilities &= tixTCPKnownCapabilities
+	transition := tixTCPCapabilityTransition{
+		generation:   session.nextCapabilityUpdateGeneration(),
+		capabilities: capabilities,
+	}
+
+	// The legacy frame stops old peers. Current peers acknowledge the
+	// sequenced frame only after their kernel send state has been updated.
+	session.sendMu.Lock()
+	if err := session.compatControl.SendPacket(
+		encodeTIXTCPCompatControlCapabilities(capabilities),
+	); err != nil {
+		session.sendMu.Unlock()
+		return false, false, fmt.Errorf("send tix_tcp compat capabilities: %w", err)
+	}
+	advertised = true
+	if err := session.compatControl.SendPacket(
+		encodeTIXTCPCompatCapabilityTransition(
+			tixTCPCompatControlCapabilityUpdateType, transition,
+		),
+	); err != nil {
+		session.sendMu.Unlock()
+		return false, true, fmt.Errorf("send tix_tcp capability transition: %w", err)
+	}
+	session.sendMu.Unlock()
+
+	acknowledged = session.waitCompatCapabilityAck(ctx, transition)
+	return acknowledged, true, nil
+}
+
+func (session *session) sendCompatCapabilityAck(
+	transition tixTCPCapabilityTransition,
+) error {
+	if session == nil || session.compatControl == nil {
+		return nil
+	}
+	session.sendMu.Lock()
+	defer session.sendMu.Unlock()
+	if err := session.compatControl.SendPacket(
+		encodeTIXTCPCompatCapabilityTransition(
+			tixTCPCompatControlCapabilityAckType, transition,
+		),
+	); err != nil {
+		return fmt.Errorf("send tix_tcp capability acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func (session *session) waitCompatCapabilityAck(
+	ctx context.Context, wanted tixTCPCapabilityTransition,
+) bool {
+	if session == nil || session.capabilityAckCh == nil {
+		return false
+	}
+	timer := time.NewTimer(tixTCPCapabilityAckTimeout())
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-session.closed:
+			return false
+		case transition := <-session.capabilityAckCh:
+			if transition == wanted {
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func (session *session) recordCompatCapabilityAck(
+	transition tixTCPCapabilityTransition,
+) {
+	if session == nil || session.capabilityAckCh == nil {
+		return
+	}
+	select {
+	case session.capabilityAckCh <- transition:
+		return
+	default:
+	}
+	select {
+	case <-session.capabilityAckCh:
+	default:
+	}
+	select {
+	case session.capabilityAckCh <- transition:
+	default:
+	}
+}
+
+func tixTCPCapabilityTransitionDuration(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	if value > tixTCPCapabilityTransitionDurationMax {
+		return tixTCPCapabilityTransitionDurationMax
+	}
+	return value
+}
+
+func tixTCPCapabilityAckTimeout() time.Duration {
+	return tixTCPCapabilityTransitionDuration(
+		"TRUSTIX_TIX_TCP_CAPABILITY_ACK_TIMEOUT",
+		tixTCPCapabilityAckTimeoutDefault,
+	)
+}
+
+func tixTCPCapabilityWithdrawalGrace(acknowledged bool) time.Duration {
+	if acknowledged {
+		return tixTCPCapabilityTransitionDuration(
+			"TRUSTIX_TIX_TCP_CAPABILITY_WITHDRAW_GRACE",
+			tixTCPCapabilityWithdrawGraceDefault,
+		)
+	}
+	return tixTCPCapabilityTransitionDuration(
+		"TRUSTIX_TIX_TCP_CAPABILITY_WITHDRAW_LEGACY_GRACE",
+		tixTCPCapabilityWithdrawLegacyGraceDefault,
+	)
+}
+
+func (session *session) waitCapabilityWithdrawalDrain(
+	ctx context.Context, acknowledged bool,
+) bool {
+	timer := time.NewTimer(tixTCPCapabilityWithdrawalGrace(acknowledged))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-session.closed:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (session *session) refreshLocalCapabilities(ctx context.Context) error {
 	if session == nil || session.provider == nil || session.compatControl == nil ||
 		(!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
 		return nil
 	}
 	capabilities, statusErr := tixTCPProviderLocalCapabilities(ctx, session.provider)
-	if capabilities == session.localCapabilities.Load() {
+	current := session.localCapabilities.Load()
+	if capabilities == current {
 		if statusErr != nil {
 			return fmt.Errorf("refresh tix_tcp local capabilities: %w", statusErr)
 		}
 		return nil
 	}
-	if session.localCapabilities.Swap(capabilities) != capabilities {
-		session.notifyKernelDatapathStateChange()
+	if !session.kernelDatapathReady.Load() {
+		return errTIXTCPCapabilityReconnect
 	}
-	if err := session.sendCompatCapabilitiesValue(capabilities); err != nil {
-		return fmt.Errorf("%w: %w", errTIXTCPCapabilityAdvertisement, err)
+	// Stop the peer, drain frames emitted before its send-state commit, then
+	// remove local receive acceptance. This keeps a recoverable runtime circuit
+	// event from becoming a control-plane outage.
+	target := current & capabilities
+	if withdrawn := current &^ capabilities; withdrawn != 0 {
+		advertised := target | tixTCPCapabilityKernelDatapathReady
+		acknowledged, sent, sendErr := session.sendCompatCapabilityTransition(
+			ctx, advertised,
+		)
+		if !sent {
+			return fmt.Errorf("%w: %w", errTIXTCPCapabilityAdvertisement, sendErr)
+		}
+		session.capabilityWithdrawals.Add(1)
+		if acknowledged {
+			session.capabilityWithdrawalAcks.Add(1)
+		} else {
+			session.capabilityAckTimeouts.Add(1)
+		}
+		if !session.waitCapabilityWithdrawalDrain(ctx, acknowledged) {
+			return nil
+		}
+		if !session.localCapabilities.CompareAndSwap(current, target) {
+			return errTIXTCPCapabilityReconnect
+		}
+		if err := session.notifyKernelDatapathStateChange(); err != nil {
+			return fmt.Errorf("%w: withdraw local capabilities: %w", errTIXTCPCapabilityCommit, err)
+		}
+		current = target
+		if sendErr != nil {
+			return fmt.Errorf("%w: %w", errTIXTCPCapabilityAdvertisement, sendErr)
+		}
 	}
 	if statusErr != nil {
 		return fmt.Errorf("refresh tix_tcp local capabilities: %w", statusErr)
+	}
+	if capabilities != current {
+		// Additions are enabled by a replacement session whose readiness barrier
+		// commits receive state before publishing the new feature bits.
+		return errTIXTCPCapabilityReconnect
 	}
 	return nil
 }
@@ -1176,10 +1397,16 @@ func (session *session) monitorLocalCapabilities(ctx context.Context) {
 		(!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
 		return
 	}
-	ticker := time.NewTicker(tixTCPCompatCapabilityRefreshInterval)
-	defer ticker.Stop()
-	refresh := func() {
+	refresh := func() bool {
 		if err := session.refreshLocalCapabilities(ctx); err != nil {
+			if errors.Is(err, errTIXTCPCapabilityReconnect) {
+				session.capabilityRefreshFailed.Store(false)
+				transport.ObserveAsyncError(
+					"close tix_tcp session for capability change",
+					session.Close(),
+				)
+				return false
+			}
 			if session.capabilityRefreshFailed.CompareAndSwap(false, true) {
 				session.backgroundErrors.Record("refresh tix_tcp local capabilities", err)
 			}
@@ -1188,22 +1415,46 @@ func (session *session) monitorLocalCapabilities(ctx context.Context) {
 					"close tix_tcp session after capability advertisement failure",
 					session.Close(),
 				)
+				return false
 			}
-			return
+			if errors.Is(err, errTIXTCPCapabilityCommit) {
+				transport.ObserveAsyncError(
+					"close tix_tcp session after capability state commit failure",
+					session.Close(),
+				)
+				return false
+			}
+			return true
 		}
 		session.capabilityRefreshFailed.Store(false)
+		return true
 	}
-	refresh()
+	if !refresh() {
+		return
+	}
+	timer := time.NewTimer(session.localCapabilityRefreshInterval())
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-session.closed:
 			return
-		case <-ticker.C:
-			refresh()
+		case <-timer.C:
+			if !refresh() {
+				return
+			}
+			timer.Reset(session.localCapabilityRefreshInterval())
 		}
 	}
+}
+
+func (session *session) localCapabilityRefreshInterval() time.Duration {
+	if session != nil &&
+		session.localCapabilities.Load()&tixTCPCapabilityInnerGSO != 0 {
+		return tixTCPCompatInnerGSOCapabilityRefreshInterval
+	}
+	return tixTCPCompatCapabilityRefreshInterval
 }
 
 func (session *session) readSubscription(ctx context.Context) {
@@ -1251,8 +1502,39 @@ func (session *session) readCompatControl(ctx context.Context) {
 			transport.ObserveAsyncError("close tix_tcp session after compat control receive failure", session.Close())
 			return
 		}
+		if transition, ok := decodeTIXTCPCompatCapabilityTransition(
+			packet, tixTCPCompatControlCapabilityUpdateType,
+		); ok {
+			if err := session.setPeerCapabilities(transition.capabilities); err != nil {
+				transport.ObserveAsyncError(
+					"close tix_tcp session after peer capability state commit failure",
+					errors.Join(err, session.Close()),
+				)
+				return
+			}
+			if err := session.sendCompatCapabilityAck(transition); err != nil {
+				transport.ObserveAsyncError(
+					"close tix_tcp session after capability acknowledgement failure",
+					errors.Join(err, session.Close()),
+				)
+				return
+			}
+			continue
+		}
+		if transition, ok := decodeTIXTCPCompatCapabilityTransition(
+			packet, tixTCPCompatControlCapabilityAckType,
+		); ok {
+			session.recordCompatCapabilityAck(transition)
+			continue
+		}
 		if capabilities, ok := decodeTIXTCPCompatControlCapabilities(packet); ok {
-			session.setPeerCapabilities(capabilities)
+			if err := session.setPeerCapabilities(capabilities); err != nil {
+				transport.ObserveAsyncError(
+					"close tix_tcp session after legacy peer capability state commit failure",
+					errors.Join(err, session.Close()),
+				)
+				return
+			}
 			continue
 		}
 		if !tixTCPCompatControlEligible(packet) {
@@ -2021,8 +2303,10 @@ func (session *session) innerTCPChecksumPartialCapabilities() (local, peer, nego
 		return false, false, false
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
-	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
-	return local, peer, local && peer
+	peerCapabilities := session.peerCapabilities.Load()
+	peer = peerCapabilities&tixTCPCapabilityInnerTCPChecksumPartial != 0 &&
+		peerCapabilities&tixTCPCapabilityKernelDatapathReady != 0
+	return local, peer, local && peer && session.kernelDatapathReady.Load()
 }
 
 func (session *session) secureInnerTCPChecksumPartialCapabilities() (local, peer, negotiated bool) {
@@ -2030,8 +2314,10 @@ func (session *session) secureInnerTCPChecksumPartialCapabilities() (local, peer
 		return false, false, false
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilitySecureInnerTCPChecksumPartial != 0
-	peer = session.peerCapabilities.Load()&tixTCPCapabilitySecureInnerTCPChecksumPartial != 0
-	return local, peer, local && peer
+	peerCapabilities := session.peerCapabilities.Load()
+	peer = peerCapabilities&tixTCPCapabilitySecureInnerTCPChecksumPartial != 0 &&
+		peerCapabilities&tixTCPCapabilityKernelDatapathReady != 0
+	return local, peer, local && peer && session.kernelDatapathReady.Load()
 }
 
 func (session *session) innerGSOCapabilities() (local, peer, negotiated bool) {
@@ -2039,8 +2325,10 @@ func (session *session) innerGSOCapabilities() (local, peer, negotiated bool) {
 		return false, false, false
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
-	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
-	return local, peer, local && peer
+	peerCapabilities := session.peerCapabilities.Load()
+	peer = peerCapabilities&tixTCPCapabilityInnerGSO != 0 &&
+		peerCapabilities&tixTCPCapabilityKernelDatapathReady != 0
+	return local, peer, local && peer && session.kernelDatapathReady.Load()
 }
 
 func (session *session) portShardingCapabilities() (local, peer, negotiated bool) {
@@ -2048,11 +2336,62 @@ func (session *session) portShardingCapabilities() (local, peer, negotiated bool
 		return false, false, false
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilityPortSharding != 0
-	peer = session.peerCapabilities.Load()&tixTCPCapabilityPortSharding != 0
+	peerCapabilities := session.peerCapabilities.Load()
+	peer = peerCapabilities&tixTCPCapabilityPortSharding != 0 &&
+		peerCapabilities&tixTCPCapabilityKernelDatapathReady != 0
+	return local, peer, local && peer && session.kernelDatapathReady.Load()
+}
+
+func (session *session) kernelDatapathReadiness() (local, peer, negotiated bool) {
+	if session == nil {
+		return false, false, false
+	}
+	local = session.kernelDatapathReady.Load()
+	peer = session.peerCapabilities.Load()&tixTCPCapabilityKernelDatapathReady != 0
 	return local, peer, local && peer
 }
 
-func (session *session) SetKernelDatapathSessionStateChangeHook(hook func()) {
+func (session *session) MarkKernelDatapathSessionReady(ctx context.Context) error {
+	if session == nil || (!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
+		return nil
+	}
+	if session.compatControl == nil {
+		return fmt.Errorf("tix_tcp %s cannot advertise kernel readiness without compat control", session.fullKernelDatapathName())
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	session.kernelDatapathReadyMu.Lock()
+	defer session.kernelDatapathReadyMu.Unlock()
+	if session.kernelDatapathReady.Load() {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-session.closed:
+		return fmt.Errorf("tix_tcp session is closed")
+	default:
+	}
+	if session.provider != nil {
+		capabilities, err := tixTCPProviderLocalCapabilities(ctx, session.provider)
+		if err != nil {
+			return fmt.Errorf("verify tix_tcp capabilities before kernel readiness: %w", err)
+		}
+		current := session.localCapabilities.Load()
+		if capabilities != current {
+			return fmt.Errorf("%w: tix_tcp capabilities changed before kernel readiness (session=%#x current=%#x)", errTIXTCPCapabilityReconnect, current, capabilities)
+		}
+	}
+	session.kernelDatapathReady.Store(true)
+	if err := session.sendCompatCapabilities(); err != nil {
+		session.kernelDatapathReady.Store(false)
+		return fmt.Errorf("%w: %w", errTIXTCPCapabilityAdvertisement, err)
+	}
+	return nil
+}
+
+func (session *session) SetKernelDatapathSessionStateChangeHook(hook func() error) {
 	if session == nil {
 		return
 	}
@@ -2061,27 +2400,31 @@ func (session *session) SetKernelDatapathSessionStateChangeHook(hook func()) {
 	session.kernelDatapathStateHookMu.Unlock()
 }
 
-func (session *session) setPeerCapabilities(capabilities uint64) {
+func (session *session) setPeerCapabilities(capabilities uint64) error {
 	if session == nil {
-		return
+		return nil
 	}
 	capabilities &= tixTCPKnownCapabilities
 	if session.peerCapabilities.Swap(capabilities) == capabilities {
-		return
+		return nil
 	}
-	session.notifyKernelDatapathStateChange()
+	if err := session.notifyKernelDatapathStateChange(); err != nil {
+		return fmt.Errorf("commit peer tix_tcp capabilities: %w", err)
+	}
+	return nil
 }
 
-func (session *session) notifyKernelDatapathStateChange() {
+func (session *session) notifyKernelDatapathStateChange() error {
 	if session == nil {
-		return
+		return nil
 	}
 	session.kernelDatapathStateHookMu.Lock()
 	hook := session.kernelDatapathStateHook
 	session.kernelDatapathStateHookMu.Unlock()
 	if hook != nil {
-		hook()
+		return hook()
 	}
+	return nil
 }
 
 func (session *session) EnableCryptoOffload(spec transport.CryptoOffloadSpec) error {
@@ -2117,7 +2460,9 @@ func (session *session) EnableCryptoOffload(spec transport.CryptoOffloadSpec) er
 	session.cryptoOffloaded = true
 	session.configuredFragmentPayload = tixTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, true)
 	session.fragmentPayloadCached = 0
-	session.notifyKernelDatapathStateChange()
+	if err := session.notifyKernelDatapathStateChange(); err != nil {
+		return fmt.Errorf("commit tix_tcp crypto offload state: %w", err)
+	}
 	return nil
 }
 
@@ -2598,7 +2943,7 @@ func tixTCPLocalCapabilityBits(capabilities dataplane.TIXTCPCapabilities) uint64
 	if capabilities.FullPlaintextKernel && capabilities.InnerTCPChecksumPartial {
 		bits |= tixTCPCapabilityInnerTCPChecksumPartial
 	}
-	if capabilities.FullPlaintextKernel && capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial {
+	if capabilities.FullPlaintextKernel && capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial && capabilities.PortSharding {
 		bits |= tixTCPCapabilityInnerGSO
 	}
 	if capabilities.FullSecureKernel && capabilities.SecureInnerTCPChecksumPartial {
@@ -2627,6 +2972,36 @@ func decodeTIXTCPCompatControlCapabilities(payload []byte) (uint64, bool) {
 		return 0, false
 	}
 	return binary.BigEndian.Uint64(payload[6:14]) & tixTCPKnownCapabilities, true
+}
+
+func encodeTIXTCPCompatCapabilityTransition(
+	messageType byte, transition tixTCPCapabilityTransition,
+) []byte {
+	payload := make([]byte, tixTCPCompatControlCapabilityTransitionLen)
+	copy(payload[0:4], tixTCPCompatControlMagic[:])
+	payload[4] = tixTCPCompatControlVersion
+	payload[5] = messageType
+	binary.BigEndian.PutUint32(payload[6:10], transition.generation)
+	binary.BigEndian.PutUint64(
+		payload[10:18], transition.capabilities&tixTCPKnownCapabilities,
+	)
+	return payload
+}
+
+func decodeTIXTCPCompatCapabilityTransition(
+	payload []byte, messageType byte,
+) (tixTCPCapabilityTransition, bool) {
+	if len(payload) != tixTCPCompatControlCapabilityTransitionLen ||
+		string(payload[0:4]) != string(tixTCPCompatControlMagic[:]) ||
+		payload[4] != tixTCPCompatControlVersion ||
+		payload[5] != messageType {
+		return tixTCPCapabilityTransition{}, false
+	}
+	transition := tixTCPCapabilityTransition{
+		generation:   binary.BigEndian.Uint32(payload[6:10]),
+		capabilities: binary.BigEndian.Uint64(payload[10:18]) & tixTCPKnownCapabilities,
+	}
+	return transition, transition.generation != 0
 }
 
 func decodeTIXTCPCompatControlInit(payload []byte) (tixTCPCompatControlInit, bool) {
@@ -3051,6 +3426,7 @@ func (session *session) fragmentStats() map[string]uint64 {
 	localSecurePartial, peerSecurePartial, negotiatedSecurePartial := session.secureInnerTCPChecksumPartialCapabilities()
 	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
 	localPortSharding, peerPortSharding, negotiatedPortSharding := session.portShardingCapabilities()
+	localReady, peerReady, negotiatedReady := session.kernelDatapathReadiness()
 	extra := map[string]uint64{
 		tixTCPStatFragmentedPacketsSent:                   session.fragmentedPacketsSent.Load(),
 		tixTCPStatFragmentsSent:                           session.fragmentsSent.Load(),
@@ -3077,6 +3453,12 @@ func (session *session) fragmentStats() map[string]uint64 {
 		tixTCPStatPortShardingLocal:                       tixTCPBoolUint64(localPortSharding),
 		tixTCPStatPortShardingPeer:                        tixTCPBoolUint64(peerPortSharding),
 		tixTCPStatPortShardingNegotiated:                  tixTCPBoolUint64(negotiatedPortSharding),
+		tixTCPStatKernelDatapathReadyLocal:                tixTCPBoolUint64(localReady),
+		tixTCPStatKernelDatapathReadyPeer:                 tixTCPBoolUint64(peerReady),
+		tixTCPStatKernelDatapathReadyNegotiated:           tixTCPBoolUint64(negotiatedReady),
+		tixTCPStatCapabilityWithdrawals:                   session.capabilityWithdrawals.Load(),
+		tixTCPStatCapabilityWithdrawalAcks:                session.capabilityWithdrawalAcks.Load(),
+		tixTCPStatCapabilityWithdrawalAckTimeouts:         session.capabilityAckTimeouts.Load(),
 	}
 	if session.fullPlaintextKernelDatapath {
 		extra[tixTCPStatFullPlaintextKernel] = 1

@@ -209,6 +209,8 @@ func productionGateFamilyClass(gateFamily string) string {
 		return "full_kmod"
 	case "tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
 		return "tix_tcp_full_kmod"
+	case "tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso":
+		return "tix_tcp_inner_gso"
 	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
 		return "secure_kudp"
 	case "secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
@@ -257,7 +259,7 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "userspace")
-	case "tix_tcp_full_kmod":
+	case "tix_tcp_full_kmod", "tix_tcp_inner_gso":
 		require("transport", transport, "tix_tcp")
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
@@ -5260,17 +5262,20 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
 		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
 		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
 		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	seen := map[string]bool{}
@@ -5630,8 +5635,12 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--min-iperf-intervals \"$min_iperf_intervals\"",
 		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
 		"--require-run-timing",
-		"--require-run-timing-stat iperf_mode=forward",
-		"--require-run-timing-stat iperf_directions=both",
+		"required_iperf_mode=\"${TRUSTIX_CROSS_HOST_GATE_IPERF_MODE:-forward}\"",
+		"required_iperf_directions=\"${TRUSTIX_CROSS_HOST_GATE_IPERF_DIRECTIONS:-both}\"",
+		"--require-run-timing-stat \"iperf_mode=${required_iperf_mode}\"",
+		"--require-run-timing-stat \"iperf_directions=${required_iperf_directions}\"",
+		"TRUSTIX_GATE_MANIFEST_IPERF_MODE",
+		"TRUSTIX_GATE_MANIFEST_IPERF_DIRECTIONS",
 		"--require-binary-identity",
 		"--require-strong-build-identity",
 		"--require-stable-boot-id",
@@ -5777,7 +5786,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-min trustix_datapath.session_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.session_wire_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32",
-		"--require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0",
+		"--require-module-param-os-id-max openwrt.trustix_datapath.rx_worker_single_coalesce=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_packets=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_attempts=0",
@@ -6023,6 +6032,23 @@ func slashPath(path string) string {
 	return filepath.ToSlash(path)
 }
 
+func TestCrossHostProductionGateRejectsUnsupportedIperfModePair(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	cmd := exec.Command(bash, "linux-cross-host-production-gate.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_GATE_IPERF_MODE=bidir",
+		"TRUSTIX_CROSS_HOST_GATE_IPERF_DIRECTIONS=both",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate accepted unsupported bidir/both timing mode:\n%s", output)
+	}
+	if !strings.Contains(string(output), "must be forward/both, bidir/a2b, or bidir/b2a") {
+		t.Fatalf("production gate did not report the invalid timing mode:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	bash := requireBashAndPython3(t)
 	workdir := t.TempDir()
@@ -6063,6 +6089,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=999",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS=0",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO=0",
+		"TRUSTIX_CROSS_HOST_GATE_IPERF_MODE=bidir",
+		"TRUSTIX_CROSS_HOST_GATE_IPERF_DIRECTIONS=a2b",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS=0",
@@ -6151,6 +6179,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"seconds_slop":                               "1",
 		"min_iperf_intervals":                        "600",
 		"min_interval_gbps_ratio":                    "0.25",
+		"iperf_mode":                                 "bidir",
+		"iperf_directions":                           "a2b",
 		"full_kmod_min_sessions":                     "8",
 		"tix_tcp_full_kmod_min_gbps":                 "4",
 		"tix_tcp_full_kmod_min_pool_size":            "16",
@@ -6469,8 +6499,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		requireArgPair(caseName, "--require-module-param-max", "trustix_datapath_helpers.selftest_failures=0")
 	}
 	for _, name := range []string{fastName, slowName, userspaceTCName, "tc", "full", "expfull", "secure", "secure-exp", "route"} {
-		requireArgPair(name, "--require-run-timing-stat", "iperf_mode=forward")
-		requireArgPair(name, "--require-run-timing-stat", "iperf_directions=both")
+		requireArgPair(name, "--require-run-timing-stat", "iperf_mode=bidir")
+		requireArgPair(name, "--require-run-timing-stat", "iperf_directions=a2b")
 	}
 	requireTrafficArgs := func(caseName string) {
 		t.Helper()
@@ -6966,6 +6996,7 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"\"runner_case\":\"%s\"",
 		"runner_case_name",
 		"gate_family_class",
+		"tix_tcp_inner_gso) return 0",
 		"matrix_case_name",
 		"gate_class=\"$(gate_family_class \"$gate_family\")\"",
 		"local base=\"${token}-${encryption}-${profile}-${datapath}-${placement}-${gate_class}\"",
@@ -6973,6 +7004,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"owdeb_full_kmod) printf 'owdeb-fullkmod\\n'",
 		"tix_tcp_full_kmod|dd_tix_tcp_full_kmod) printf 'tix-tcp-full-kmod\\n'",
 		"owdeb_tix_tcp_full_kmod) printf 'owdeb-tix-tcp-full-kmod\\n'",
+		"tix_tcp_inner_gso|dd_tix_tcp_inner_gso) printf 'tix-tcp-full-kmod\\n'",
+		"owdeb_tix_tcp_inner_gso) printf 'owdeb-tix-tcp-full-kmod\\n'",
 		"secure_kudp|dd_secure_kudp) printf 'secure-kudp\\n'",
 		"owdeb_secure_kudp) printf 'owdeb-secure-kudp\\n'",
 		"secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure-tix-tcp-kernel\\n'",
@@ -6987,16 +7020,19 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"append_case_token tc_direct_case_min_gbps",
 		"append_case_token full_kmod_case_min_gbps",
 		"append_case_token tix_tcp_full_kmod_case_min_gbps",
+		"append_case_token tix_tcp_inner_gso_case_min_gbps",
 		"append_case_token secure_kudp_case_min_gbps",
 		"append_case_token secure_tix_tcp_kernel_case_min_gbps",
 		"append_case_token route_gso_case_min_gbps",
 		"append_case_token full_kmod_case_min_seconds",
 		"append_case_token tix_tcp_full_kmod_case_min_seconds",
+		"append_case_token tix_tcp_inner_gso_case_min_seconds",
 		"append_case_token secure_kudp_case_min_seconds",
 		"append_case_token secure_tix_tcp_kernel_case_min_seconds",
 		"append_case_token route_gso_case_min_seconds",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
 		"tix_tcp_full_kmod|dd_tix_tcp_full_kmod|owdeb_tix_tcp_full_kmod) printf 'tix_tcp_full_kmod\\n'",
+		"tix_tcp_inner_gso|dd_tix_tcp_inner_gso|owdeb_tix_tcp_inner_gso) printf 'tix_tcp_inner_gso\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure_tix_tcp_kernel\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
@@ -7005,6 +7041,7 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_PROFILE=\"$profile\"",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=\"$datapath\"",
 		"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=\"$placement\"",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO=\"$inner_gso_override\"",
 		"TRUSTIX_CROSS_HOST_KEEP_REMOTE=\"$keep_remote\"",
 		"record_result \"dry_run\"",
 		"--require-transport-policy-stat\" \"encryption=${encryption}",
@@ -7030,6 +7067,9 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=${tix_tcp_full_kmod_cases}",
 		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS=${tix_tcp_full_kmod_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS=${tix_tcp_full_kmod_case_min_seconds}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=${tix_tcp_inner_gso_cases}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS=${tix_tcp_inner_gso_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS=${tix_tcp_inner_gso_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=${secure_kudp_case_min_seconds}",
@@ -7473,6 +7513,10 @@ func productionDefaultRunnerCase(row productionTransportDefault) string {
 		return "tix-tcp-full-kmod"
 	case "owdeb_tix_tcp_full_kmod":
 		return "owdeb-tix-tcp-full-kmod"
+	case "tix_tcp_inner_gso", "dd_tix_tcp_inner_gso":
+		return "tix-tcp-full-kmod"
+	case "owdeb_tix_tcp_inner_gso":
+		return "owdeb-tix-tcp-full-kmod"
 	case "secure_kudp", "dd_secure_kudp":
 		return "secure-kudp"
 	case "owdeb_secure_kudp":
@@ -7510,6 +7554,7 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
 		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
 		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",
@@ -7523,7 +7568,8 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 func productionDefaultCapabilityProfile(row productionTransportDefault) string {
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso":
 		return "full_plaintext"
 	case "userspace", "userspace_tc", "tc_direct":
 		return "disabled"
@@ -7536,7 +7582,8 @@ func productionDefaultModuleSnippets(row productionTransportDefault) []string {
 	base := []string{"capability_profile: " + productionDefaultCapabilityProfile(row)}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso":
 		return append(base,
 			"trustix_crypto:\n    mode: disabled",
 			"trustix_datapath:\n    mode: required",
@@ -7940,6 +7987,81 @@ func TestCrossHostTransportMatrixCanRepresentTIXTCPFullKmodWhenExplicitlyValidat
 		}
 		if row.Case != wantCases[family] {
 			t.Fatalf("unexpected %s case name: got %q want %q\n%s", family, row.Case, wantCases[family], payload)
+		}
+	}
+}
+
+func TestCrossHostTransportMatrixCanRepresentTIXTCPInnerGSOWhenExplicitlyValidated(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	summary := filepath.Join(workdir, "summary.jsonl")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_inner_gso\t4\t3600\tDebian inner-GSO production candidate",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_tix_tcp_inner_gso\t4\t3600\tOpenWrt-Debian inner-GSO production candidate",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+defaults,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run explicit TIX-TCP inner-GSO matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	got := map[string]crossHostTransportMatrixDryRunRow{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row crossHostTransportMatrixDryRunRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode summary row %q: %v", line, err)
+		}
+		got[row.GateFamily] = row
+	}
+	tests := map[string]struct {
+		runner string
+		name   string
+	}{
+		"tix_tcp_inner_gso": {
+			runner: "tix-tcp-full-kmod",
+			name:   "tix_tcp-plaintext-performance-kernel_module-userspace-tix_tcp_inner_gso",
+		},
+		"owdeb_tix_tcp_inner_gso": {
+			runner: "owdeb-tix-tcp-full-kmod",
+			name:   "tix_tcp-plaintext-performance-kernel_module-userspace-tix_tcp_inner_gso-owdeb",
+		},
+	}
+	for family, want := range tests {
+		row, ok := got[family]
+		if !ok {
+			t.Fatalf("summary missing %s:\n%s", family, payload)
+		}
+		if row.RunnerCase != want.runner || row.Case != want.name ||
+			row.Transport != "tix_tcp" || row.Datapath != "kernel_module" ||
+			row.CryptoPlacement != "userspace" {
+			t.Fatalf("unexpected %s dry-run row: %+v\n%s", family, row, payload)
 		}
 	}
 }

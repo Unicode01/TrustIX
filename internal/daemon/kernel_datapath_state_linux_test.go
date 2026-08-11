@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -363,6 +364,101 @@ func TestSyncKernelDatapathSessionUpsertDoesNotCommitCryptoAfterApplyFailure(t *
 	}
 	if status := daemon.runtimeReconcileStatus(); !status.Pending || status.LastError == "" {
 		t.Fatalf("failed state apply did not request reconciliation: %+v", status)
+	}
+}
+
+func TestKernelDatapathSessionReadinessWaitsForStateCommit(t *testing.T) {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{Name: "trustix_datapath", Loaded: true, State: "loaded"})
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    "198.51.100.2:17042",
+		Encryption: "plaintext",
+	}
+	session := &kernelDatapathReadyTestSession{
+		info: transport.KernelDatapathSessionInfo{
+			FlowID:        7,
+			Protocol:      transport.ProtocolTIXTCP,
+			Peer:          key.Peer,
+			Endpoint:      key.Endpoint,
+			LocalAddress:  "192.0.2.1:17041",
+			RemoteAddress: "198.51.100.2:17042",
+		},
+		ready: make(chan struct{}),
+	}
+	runtime := &dataSessionRuntime{key: key, session: session}
+	daemon := &Daemon{
+		kernelDatapath:   manager,
+		dataSessions:     map[dataSessionKey]transport.Session{key: session},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{key: runtime},
+	}
+
+	applyEntered := make(chan struct{})
+	releaseApply := make(chan struct{})
+	original := kernelDatapathApplyStateBatch
+	var enterOnce sync.Once
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		enterOnce.Do(func() { close(applyEntered) })
+		<-releaseApply
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	done := make(chan struct{})
+	go func() {
+		daemon.syncKernelDatapathSessionUpsert(key, runtime, session)
+		close(done)
+	}()
+	select {
+	case <-applyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("kernel state apply did not start")
+	}
+	select {
+	case <-session.ready:
+		t.Fatal("session readiness was advertised before the kernel state commit completed")
+	default:
+	}
+	close(releaseApply)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session upsert did not complete")
+	}
+	select {
+	case <-session.ready:
+	case <-time.After(time.Second):
+		t.Fatal("session readiness was not advertised after the kernel state commit")
+	}
+}
+
+func TestKernelDatapathSessionReadinessIsWithheldAfterStateFailure(t *testing.T) {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{Name: "trustix_datapath", Loaded: true, State: "loaded"})
+	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-tix-tcp", Transport: transport.ProtocolTIXTCP}
+	session := &kernelDatapathReadyTestSession{
+		info:  transport.KernelDatapathSessionInfo{FlowID: 7, Protocol: transport.ProtocolTIXTCP},
+		ready: make(chan struct{}),
+	}
+	runtime := &dataSessionRuntime{key: key, session: session}
+	daemon := &Daemon{
+		kernelDatapath:   manager,
+		dataSessions:     map[dataSessionKey]transport.Session{key: session},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{key: runtime},
+	}
+	original := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(_ string, _ []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return 0, nil, errors.New("injected readiness state failure")
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	daemon.syncKernelDatapathSessionUpsert(key, runtime, session)
+	select {
+	case <-session.ready:
+		t.Fatal("session readiness was advertised after a failed kernel state commit")
+	default:
 	}
 }
 
@@ -865,10 +961,28 @@ func TestKernelDatapathSessionChecksumPartialFlagsAreDirectional(t *testing.T) {
 		flags&kernelDatapathSessionFlagSendTIXTCPPortSharding != 0 {
 		t.Fatalf("local-only flags = %#x, want receive-only inner optimizations", flags)
 	}
+	info.InnerTCPChecksumPartialLocal = false
+	info.InnerTCPChecksumPartialPeer = true
+	info.InnerGSOLocal = false
+	info.InnerGSOPeer = true
+	info.TIXTCPPortShardingLocal = false
+	info.TIXTCPPortShardingPeer = true
+	flags = kernelDatapathSessionFlags(key, nil, info)
+	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial != 0 ||
+		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagReceiveInnerGSO != 0 ||
+		flags&kernelDatapathSessionFlagSendInnerGSO == 0 ||
+		flags&kernelDatapathSessionFlagReceiveTIXTCPPortSharding != 0 ||
+		flags&kernelDatapathSessionFlagSendTIXTCPPortSharding == 0 {
+		t.Fatalf("peer-only flags = %#x, want send-only inner optimizations", flags)
+	}
+	info.InnerTCPChecksumPartialLocal = true
 	info.InnerTCPChecksumPartialPeer = true
 	info.InnerTCPChecksumPartialNegotiated = true
+	info.InnerGSOLocal = true
 	info.InnerGSOPeer = true
 	info.InnerGSONegotiated = true
+	info.TIXTCPPortShardingLocal = true
 	info.TIXTCPPortShardingPeer = true
 	info.TIXTCPPortShardingNegotiated = true
 	flags = kernelDatapathSessionFlags(key, nil, info)
@@ -1040,6 +1154,20 @@ func TestKernelDatapathSyntheticInnerGSOIsDirectional(t *testing.T) {
 	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
 	if send || !receive {
 		t.Fatalf("one-sided inner GSO = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:             7,
+		Protocol:           transport.ProtocolTIXTCP,
+		Peer:               peer.ID,
+		Endpoint:           endpoint.Name,
+		InnerGSOLocal:      false,
+		InnerGSOPeer:       true,
+		InnerGSONegotiated: false,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
+	if !send || receive {
+		t.Fatalf("peer-only inner GSO = send:%t receive:%t, want true/false", send, receive)
 	}
 
 	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
@@ -1873,6 +2001,41 @@ func TestKernelDatapathFlowRecordSkipsIPv6ForNow(t *testing.T) {
 
 type kernelDatapathTestSession struct {
 	info transport.KernelDatapathSessionInfo
+}
+
+type kernelDatapathReadyTestSession struct {
+	info      transport.KernelDatapathSessionInfo
+	hookMu    sync.Mutex
+	hook      func() error
+	readyOnce sync.Once
+	ready     chan struct{}
+}
+
+func (session *kernelDatapathReadyTestSession) KernelDatapathSessionInfo() (transport.KernelDatapathSessionInfo, bool) {
+	return session.info, true
+}
+
+func (session *kernelDatapathReadyTestSession) SetKernelDatapathSessionStateChangeHook(hook func() error) {
+	session.hookMu.Lock()
+	session.hook = hook
+	session.hookMu.Unlock()
+}
+
+func (session *kernelDatapathReadyTestSession) MarkKernelDatapathSessionReady(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	session.readyOnce.Do(func() { close(session.ready) })
+	return nil
+}
+
+func (session *kernelDatapathReadyTestSession) SendPacket(pkt []byte) error { return nil }
+func (session *kernelDatapathReadyTestSession) RecvPacket() ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+func (session *kernelDatapathReadyTestSession) Close() error { return nil }
+func (session *kernelDatapathReadyTestSession) Stats() transport.TransportStats {
+	return transport.TransportStats{}
 }
 
 func (session kernelDatapathTestSession) KernelDatapathSessionInfo() (transport.KernelDatapathSessionInfo, bool) {

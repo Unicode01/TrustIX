@@ -113,6 +113,8 @@ runner_case_name() {
     owdeb_full_kmod) printf 'owdeb-fullkmod\n'; return ;;
     tix_tcp_full_kmod|dd_tix_tcp_full_kmod) printf 'tix-tcp-full-kmod\n'; return ;;
     owdeb_tix_tcp_full_kmod) printf 'owdeb-tix-tcp-full-kmod\n'; return ;;
+    tix_tcp_inner_gso|dd_tix_tcp_inner_gso) printf 'tix-tcp-full-kmod\n'; return ;;
+    owdeb_tix_tcp_inner_gso) printf 'owdeb-tix-tcp-full-kmod\n'; return ;;
     secure_kudp|dd_secure_kudp) printf 'secure-kudp\n'; return ;;
     owdeb_secure_kudp) printf 'owdeb-secure-kudp\n'; return ;;
     secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure-tix-tcp-kernel\n'; return ;;
@@ -131,10 +133,19 @@ gate_family_class() {
   case "$1" in
     full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\n' ;;
     tix_tcp_full_kmod|dd_tix_tcp_full_kmod|owdeb_tix_tcp_full_kmod) printf 'tix_tcp_full_kmod\n' ;;
+    tix_tcp_inner_gso|dd_tix_tcp_inner_gso|owdeb_tix_tcp_inner_gso) printf 'tix_tcp_inner_gso\n' ;;
     secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\n' ;;
     secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure_tix_tcp_kernel\n' ;;
     route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\n' ;;
     *) printf '%s\n' "$1" ;;
+  esac
+}
+
+inner_gso_override_for_gate_family() {
+  case "$(gate_family_class "$1")" in
+    tix_tcp_inner_gso) return 0 ;;
+    tix_tcp_full_kmod) printf '0\n' ;;
+    *) printf '\n' ;;
   esac
 }
 
@@ -192,6 +203,19 @@ validate_gate_family_semantics() {
       require_case_value datapath "$datapath" kernel_module "$gate_family"
       require_case_value crypto_placement "$placement" userspace "$gate_family"
       ;;
+    tix_tcp_inner_gso)
+      case "$gate_family" in
+        tix_tcp_inner_gso|dd_tix_tcp_inner_gso|owdeb_tix_tcp_inner_gso)
+          require_case_value transport "$transport" tix_tcp "$gate_family"
+          ;;
+        *)
+          die "unsupported TIX-TCP inner-GSO gate family: ${gate_family}"
+          ;;
+      esac
+      require_case_value encryption "$encryption" plaintext "$gate_family"
+      require_case_value datapath "$datapath" kernel_module "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
     secure_kudp)
       require_case_value transport "$transport" kernel_udp "$gate_family"
       require_case_value encryption "$encryption" secure "$gate_family"
@@ -235,7 +259,7 @@ case_selected_for_scope() {
   case "$scope" in
     all) return 0 ;;
     cross_host|selected) [[ "$validation_scope" == "cross_host" ]] ;;
-    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_class" != "full_kmod" && "$gate_class" != "tix_tcp_full_kmod" && "$gate_class" != "secure_kudp" && "$gate_class" != "secure_tix_tcp_kernel" && "$gate_class" != "route_gso" ]] ;;
+    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_class" != "full_kmod" && "$gate_class" != "tix_tcp_full_kmod" && "$gate_class" != "tix_tcp_inner_gso" && "$gate_class" != "secure_kudp" && "$gate_class" != "secure_tix_tcp_kernel" && "$gate_class" != "route_gso" ]] ;;
     *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE must be all, cross_host, selected, compat, or baseline" ;;
   esac
 }
@@ -293,7 +317,7 @@ validate_case_values() {
     *) die "unsupported validation scope in matrix case: ${validation_scope}" ;;
   esac
   case "$gate_family" in
-    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|tix_tcp_full_kmod|dd_tix_tcp_full_kmod|owdeb_tix_tcp_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
+    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|tix_tcp_full_kmod|dd_tix_tcp_full_kmod|owdeb_tix_tcp_full_kmod|tix_tcp_inner_gso|dd_tix_tcp_inner_gso|owdeb_tix_tcp_inner_gso|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
     *) die "unsupported gate family in matrix case: ${gate_family}" ;;
   esac
   validate_gate_family_semantics "$transport" "$encryption" "$datapath" "$placement" "$gate_family"
@@ -334,6 +358,12 @@ append_selected_gate_case() {
       append_case_token tix_tcp_full_kmod_cases "${name}=${dir}"
       append_case_token tix_tcp_full_kmod_case_min_gbps "${name}=${min_gbps}"
       append_case_token tix_tcp_full_kmod_case_min_seconds "${name}=${min_seconds}"
+      appended=1
+      ;;
+    tix_tcp_inner_gso)
+      append_case_token tix_tcp_inner_gso_cases "${name}=${dir}"
+      append_case_token tix_tcp_inner_gso_case_min_gbps "${name}=${min_gbps}"
+      append_case_token tix_tcp_inner_gso_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     secure_kudp)
@@ -421,7 +451,7 @@ run_case() {
   validate_case_values "$transport" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope" "$gate_family" "$default_min_gbps" "$default_min_seconds"
   case_selected_for_scope "$validation_scope" "$gate_family" || return 0
 
-  local min_gbps min_seconds token name dir timeout_seconds rc status runner_case
+  local min_gbps min_seconds token name dir timeout_seconds rc status runner_case inner_gso_override
   min_gbps="$default_min_gbps"
   if [[ -n "$min_gbps_override" ]]; then
     min_gbps="$(max_decimal "$min_gbps_override" "$default_min_gbps")"
@@ -435,6 +465,7 @@ run_case() {
   token="$(transport_token "$transport")"
   name="$(matrix_case_name "$token" "$encryption" "$profile" "$datapath" "$placement" "$gate_family")"
   runner_case="$(runner_case_name "$transport" "$encryption" "$datapath" "$gate_family")"
+  inner_gso_override="$(inner_gso_override_for_gate_family "$gate_family")"
   dir="${workdir}/${name}"
   timeout_seconds=$((min_seconds + timeout_slop))
   if truthy "$dry_run"; then
@@ -454,6 +485,7 @@ run_case() {
     TRUSTIX_CROSS_HOST_PROFILE="$profile" \
     TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH="$datapath" \
     TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT="$placement" \
+    TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO="$inner_gso_override" \
     TRUSTIX_CROSS_HOST_WORKDIR="$dir" \
     TRUSTIX_CROSS_HOST_KEEP_LOCAL=1 \
     TRUSTIX_CROSS_HOST_KEEP_REMOTE="$keep_remote" \
@@ -515,6 +547,11 @@ run_selected_gate() {
     gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=${tix_tcp_full_kmod_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS=${tix_tcp_full_kmod_case_min_gbps}")
     gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS=${tix_tcp_full_kmod_case_min_seconds}")
+  fi
+  if [[ -n "$tix_tcp_inner_gso_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=${tix_tcp_inner_gso_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS=${tix_tcp_inner_gso_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS=${tix_tcp_inner_gso_case_min_seconds}")
   fi
   if [[ -n "$secure_kudp_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}")
@@ -650,6 +687,7 @@ userspace_tc_cases=""
 tc_direct_cases=""
 full_kmod_cases=""
 tix_tcp_full_kmod_cases=""
+tix_tcp_inner_gso_cases=""
 secure_kudp_cases=""
 secure_tix_tcp_kernel_cases=""
 route_gso_cases=""
@@ -658,6 +696,7 @@ userspace_tc_case_min_gbps=""
 tc_direct_case_min_gbps=""
 full_kmod_case_min_gbps=""
 tix_tcp_full_kmod_case_min_gbps=""
+tix_tcp_inner_gso_case_min_gbps=""
 secure_kudp_case_min_gbps=""
 secure_tix_tcp_kernel_case_min_gbps=""
 route_gso_case_min_gbps=""
@@ -666,6 +705,7 @@ userspace_tc_case_min_seconds=""
 tc_direct_case_min_seconds=""
 full_kmod_case_min_seconds=""
 tix_tcp_full_kmod_case_min_seconds=""
+tix_tcp_inner_gso_case_min_seconds=""
 secure_kudp_case_min_seconds=""
 secure_tix_tcp_kernel_case_min_seconds=""
 route_gso_case_min_seconds=""

@@ -6426,6 +6426,57 @@ func TestTIXTCPCapabilityProbeCacheSharesProbeWithinTTL(t *testing.T) {
 	}
 }
 
+func TestTIXTCPInnerGSORuntimeStatusFailsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     uint64
+		available bool
+		ready     bool
+		reason    string
+	}{
+		{name: "missing", reason: "reliability status is unavailable"},
+		{name: "circuit-open", available: true, reason: "runtime circuit is open"},
+		{name: "ready", value: 1, available: true, ready: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ready, reason := tixTCPInnerGSORuntimeStatus(test.value, test.available)
+			if ready != test.ready || !strings.Contains(reason, test.reason) {
+				t.Fatalf("runtime status = ready:%t reason:%q, want ready:%t reason containing %q", ready, reason, test.ready, test.reason)
+			}
+		})
+	}
+}
+
+func TestTIXTCPInnerGSORuntimeStatusCacheExpiresQuickly(t *testing.T) {
+	manager := NewManager()
+	now := time.Unix(1_700_000_000, 0)
+	value := uint64(1)
+	calls := 0
+	probe := func() (uint64, bool) {
+		calls++
+		return value, true
+	}
+
+	ready, reason := manager.tixTCPInnerGSORuntimeStatusCachedLocked(now, probe)
+	if !ready || reason != "" {
+		t.Fatalf("initial runtime status = ready:%t reason:%q", ready, reason)
+	}
+	value = 0
+	ready, _ = manager.tixTCPInnerGSORuntimeStatusCachedLocked(
+		now.Add(tixTCPInnerGSORuntimeProbeTTL-time.Nanosecond), probe,
+	)
+	if !ready || calls != 1 {
+		t.Fatalf("cached runtime status = ready:%t calls:%d, want true/1", ready, calls)
+	}
+	ready, reason = manager.tixTCPInnerGSORuntimeStatusCachedLocked(
+		now.Add(tixTCPInnerGSORuntimeProbeTTL), probe,
+	)
+	if ready || !strings.Contains(reason, "runtime circuit is open") || calls != 2 {
+		t.Fatalf("expired runtime status = ready:%t reason:%q calls:%d", ready, reason, calls)
+	}
+}
+
 func TestTIXTCPCapabilityProbeCacheSharesFailureWithinTTL(t *testing.T) {
 	manager := NewManager()
 	now := time.Unix(1_700_000_000, 0)
@@ -18796,7 +18847,7 @@ func TestKernelDatapathRXBatchValidationCacheKeepsAuthorizationKeys(t *testing.T
 
 	for _, name := range []string{
 		"trustix_datapath_rx_worker_inline_xmit_stream_copy",
-		"trustix_datapath_rx_worker_push_stream_batch_copy",
+		"trustix_datapath_rx_worker_push_stream_batch_source",
 	} {
 		body := sourceFunctionBody(t, datapathSource, name)
 		requireSourceContains(t, body, "struct trustix_datapath_rx_validation_cache validation_cache = {};")

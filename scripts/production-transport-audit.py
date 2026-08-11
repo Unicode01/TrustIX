@@ -127,12 +127,16 @@ TIX_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
     "tix_tcp_full_kmod",
     "dd_tix_tcp_full_kmod",
     "owdeb_tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
+    "dd_tix_tcp_inner_gso",
+    "owdeb_tix_tcp_inner_gso",
 }
 LOW_LEVEL_RUNTIME_GATE_CLASSES = {
     "userspace_tc",
     "tc_direct",
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
     "secure_kudp",
     "secure_tix_tcp_kernel",
     "route_gso",
@@ -146,6 +150,7 @@ EBPF_RUNTIME_GATE_CLASSES = {
 KERNEL_MODULE_RUNTIME_GATE_CLASSES = {
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
     "secure_kudp",
     "secure_tix_tcp_kernel",
     "route_gso",
@@ -153,6 +158,7 @@ KERNEL_MODULE_RUNTIME_GATE_CLASSES = {
 FULL_DATAPATH_MODULE_GATE_CLASSES = {
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
 }
 CRYPTO_MODULE_GATE_CLASSES = {
     "secure_kudp",
@@ -172,6 +178,7 @@ KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES = {
 DAEMON_DATAPATH_SESSION_GATE_CLASSES = {
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
     "secure_kudp",
     "secure_tix_tcp_kernel",
     "route_gso",
@@ -365,6 +372,7 @@ ADDRESSED_REVERSE_SESSION_POOL_COMMITS_BY_PATH = {
 ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_TIX_TCP_GATE_CLASSES = {
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
     "route_gso",
 }
 KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
@@ -392,6 +400,7 @@ PLAINTEXT_KERNEL_UDP_HEARTBEAT_IMPACTED_GATE_CLASSES = {
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
     "tix_tcp_full_kmod",
+    "tix_tcp_inner_gso",
     "secure_kudp",
 }
 USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
@@ -1130,6 +1139,12 @@ def gate_family_class(gate_family: str) -> str:
         "owdeb_tix_tcp_full_kmod",
     }:
         return "tix_tcp_full_kmod"
+    if gate_family in {
+        "tix_tcp_inner_gso",
+        "dd_tix_tcp_inner_gso",
+        "owdeb_tix_tcp_inner_gso",
+    }:
+        return "tix_tcp_inner_gso"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
     if gate_family in {
@@ -1178,7 +1193,7 @@ def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "userspace")
-    elif gate_class == "tix_tcp_full_kmod":
+    elif gate_class in {"tix_tcp_full_kmod", "tix_tcp_inner_gso"}:
         require("transport", transport, "tix_tcp")
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
@@ -1532,6 +1547,7 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
     if normalized.startswith("internal/transport/tixtcp/"):
         return transport == "tix_tcp" or gate_class in {
             "tix_tcp_full_kmod",
+            "tix_tcp_inner_gso",
             "secure_tix_tcp_kernel",
             "route_gso",
         }

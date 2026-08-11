@@ -1775,7 +1775,7 @@ func (daemon *Daemon) refillSessionPoolAfterRuntimeDrop(runtime *dataSessionRunt
 		return
 	}
 	poolSize := daemon.sessionPoolSize()
-	if poolSize <= 1 {
+	if poolSize < 1 {
 		return
 	}
 	dialEndpoint := transportEndpointFromConfig(endpoint)

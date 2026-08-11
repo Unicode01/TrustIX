@@ -257,7 +257,13 @@ type KernelDatapathSession interface {
 }
 
 type KernelDatapathSessionStateChangeHookSetter interface {
-	SetKernelDatapathSessionStateChangeHook(func())
+	SetKernelDatapathSessionStateChangeHook(func() error)
+}
+
+// KernelDatapathSessionReadyMarker lets the daemon publish transport
+// capabilities only after the corresponding kernel session state is durable.
+type KernelDatapathSessionReadyMarker interface {
+	MarkKernelDatapathSessionReady(context.Context) error
 }
 
 type Listener interface {

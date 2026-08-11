@@ -265,6 +265,41 @@ func TestCrossHostSoakVerifyRejectsLowIperfIntervalFloor(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRejectsBidirReverseZeroIntervalRun(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfBidirJSONWithIntervals(
+		t,
+		filepath.Join(dir, "case-iperf-a-to-b-bidir.json"),
+		5.1e9,
+		5.0e9,
+		4.9e9,
+		4.8e9,
+		120.2,
+		[]float64{4.9e9, 4.8e9, 0, 0, 0, 4.7e9},
+	)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "0", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted reverse-direction zero interval run:\n%s", output)
+	}
+	if !strings.Contains(string(output), "consecutive zero/missing intervals 3, want <= 0") {
+		t.Fatalf("verify output did not report reverse-direction zero interval run:\n%s", output)
+	}
+
+	cmd = exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "0", "--min-seconds", "120", "--max-consecutive-zero-iperf-intervals", "3", dir)
+	cmd.Dir = "."
+	if output, err = cmd.CombinedOutput(); err != nil {
+		t.Fatalf("verify rejected explicitly allowed zero interval run: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostSoakVerifyRequiresRunTiming(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -361,6 +396,177 @@ func TestCrossHostSoakVerifyChecksRequiredRunTimingStats(t *testing.T) {
 	if !strings.Contains(string(output), "run timing iperf_mode='bidir', want 'forward'") ||
 		!strings.Contains(string(output), "run timing iperf_directions='a2b', want 'both'") {
 		t.Fatalf("verify output did not report run timing stat mismatch:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsInnerGSOLatchedFallbackContract(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeInnerGSOLatchedFallbackContract(t, dir, 100, 100, "pass")
+	summary := filepath.Join(dir, "summary.jsonl")
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--summary", summary,
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-inner-gso-latched-fallback-contract",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected valid inner-GSO latched-fallback contract: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	var row struct {
+		Status          string         `json:"status"`
+		LatchedFallback map[string]any `json:"inner_gso_latched_fallback"`
+	}
+	if err := json.Unmarshal(payload, &row); err != nil {
+		t.Fatalf("unmarshal summary: %v\n%s", err, payload)
+	}
+	if row.Status != "pass" || row.LatchedFallback["source"] != "inner-gso-latched-fallback-contract.txt" {
+		t.Fatalf("summary did not include passing inner-GSO latched-fallback evidence: %s", payload)
+	}
+}
+
+func TestCrossHostSoakVerifyRequiresInnerGSOLatchedFallbackContract(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-inner-gso-latched-fallback-contract",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing inner-GSO latched-fallback contract:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing inner-gso-latched-fallback-contract.txt artifact") {
+		t.Fatalf("verify did not report missing inner-GSO latched-fallback contract:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsInnerGSORestartAfterLatch(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeInnerGSOLatchedFallbackContract(t, dir, 100, 101, "pass")
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-inner-gso-latched-fallback-contract",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted inner-GSO restart after latch:\n%s", output)
+	}
+	if !strings.Contains(string(output), "inner-GSO packet counter grew after the circuit was latched") {
+		t.Fatalf("verify did not report inner-GSO restart after latch:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsInnerGSORedialDuringWithdrawal(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeInnerGSOLatchedFallbackContract(t, dir, 100, 100, "pass")
+	contractPath := filepath.Join(dir, "inner-gso-latched-fallback-contract.txt")
+	payload, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = []byte(strings.Replace(string(payload),
+		"a_session_dials_before_clear=1\n",
+		"a_session_dials_before_clear=2\n", 1))
+	if err := os.WriteFile(contractPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-inner-gso-latched-fallback-contract",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted a withdrawal-time re-dial:\n%s", output)
+	}
+	if !strings.Contains(string(output), "latched fallback re-dialed node a sessions") {
+		t.Fatalf("verify did not report the withdrawal-time re-dial:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRequiresInnerGSONetemEvidence(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeInnerGSOLatchedFallbackContract(t, dir, 100, 100, "pass")
+	if err := os.Remove(filepath.Join(dir, "netem-evidence-before-clear.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-inner-gso-latched-fallback-contract",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing netem evidence:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing netem-evidence-before-clear.txt") {
+		t.Fatalf("verify did not report missing netem evidence:\n%s", output)
 	}
 }
 
@@ -2010,6 +2216,7 @@ func TestCrossHostProductionGateAcceptsOpenWrtDebianFullKmodWithSingleCoalesceDi
 	requireProductionGateTools(t)
 	dir := t.TempDir()
 	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeStableOpenWrtOSRelease(t, dir, "a")
 	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, map[string]string{
 		"rx_worker_single_coalesce": "N",
 	})
@@ -2024,15 +2231,35 @@ func TestCrossHostProductionGateAcceptsOpenWrtDebianFullKmodWithSingleCoalesceDi
 	}
 }
 
-func TestCrossHostProductionGateRejectsOpenWrtDebianFullKmodWithSingleCoalesceEnabled(t *testing.T) {
+func TestCrossHostProductionGateAcceptsReversedOpenWrtDebianFullKmodWithSingleCoalesceDisabled(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
 	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeStableOpenWrtOSRelease(t, dir, "b")
 	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, map[string]string{
 		"rx_worker_single_coalesce": "Y",
 	})
 	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, map[string]string{
 		"rx_worker_single_coalesce": "N",
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=owdeb-fullkmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected reversed OpenWrt-Debian full-kmod artifacts with single-coalesce disabled:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsOpenWrtDebianFullKmodWithSingleCoalesceEnabled(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeStableOpenWrtOSRelease(t, dir, "b")
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "N",
+	})
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "Y",
 	})
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=owdeb-fullkmod="+filepath.ToSlash(dir))
@@ -2225,6 +2452,139 @@ func TestCrossHostProductionGateRejectsTIXTCPFullKmodRXPageFragCacheErrors(t *te
 	}
 	if !strings.Contains(string(output), "rx_worker_stream_coalesce_page_frag_cache_errors") {
 		t.Fatalf("production gate did not report RX page-frag cache errors:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateAcceptsTIXTCPInnerGSOHealthyArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPInnerGSOProductionGateArtifacts(t, dir)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=tix-tcp-inner-gso="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected healthy TIX-TCP inner-GSO artifacts with sparse timeouts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSONotNegotiated(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPInnerGSOProductionGateArtifacts(t, dir)
+	writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(dir, "collect", "b", "datapath.json"), true, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=tix-tcp-inner-gso="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted inner-GSO artifacts without datapath negotiation:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tix_tcp.inner_gso") {
+		t.Fatalf("production gate did not report disabled inner-GSO datapath state:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSOMissingPerNodeTraffic(t *testing.T) {
+	for _, parameter := range []string{
+		"tx_plaintext_inner_gso_packets",
+		"rx_worker_inner_gso_packets",
+	} {
+		t.Run(parameter, func(t *testing.T) {
+			requireProductionGateTools(t)
+			dir := t.TempDir()
+			writeTIXTCPInnerGSOProductionGateArtifacts(t, dir)
+			overrides := tixTCPInnerGSOHealthyModuleOverrides()
+			overrides[parameter] = "0"
+			writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+			cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=tix-tcp-inner-gso="+filepath.ToSlash(dir))
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("production gate unexpectedly accepted missing per-node inner-GSO traffic:\n%s", output)
+			}
+			if !strings.Contains(string(output), parameter) {
+				t.Fatalf("production gate did not report missing %s traffic:\n%s", parameter, output)
+			}
+		})
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSOUnhealthyRuntime(t *testing.T) {
+	tests := map[string]string{
+		"inner_gso_auto_recover":              "Y",
+		"inner_gso_runtime_ready":             "N",
+		"inner_gso_circuit_trips":             "1",
+		"inner_gso_timeout_circuit_trips":     "1",
+		"inner_gso_no_progress_circuit_trips": "1",
+		"inner_gso_circuit_recoveries":        "1",
+	}
+	for parameter, value := range tests {
+		t.Run(parameter, func(t *testing.T) {
+			requireProductionGateTools(t)
+			dir := t.TempDir()
+			writeTIXTCPInnerGSOProductionGateArtifacts(t, dir)
+			overrides := tixTCPInnerGSOHealthyModuleOverrides()
+			overrides[parameter] = value
+			writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, overrides)
+
+			cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=tix-tcp-inner-gso="+filepath.ToSlash(dir))
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("production gate unexpectedly accepted unhealthy inner-GSO runtime state:\n%s", output)
+			}
+			if !strings.Contains(string(output), parameter) {
+				t.Fatalf("production gate did not report unhealthy %s state:\n%s", parameter, output)
+			}
+		})
+	}
+}
+
+func TestCrossHostProductionGateAcceptsTIXTCPInnerGSOLatchedFallbackArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPInnerGSOLatchedFallbackProductionGateArtifacts(t, dir)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES=inner-gso-latched-fallback="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected TIX-TCP inner-GSO latched-fallback artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSOLatchedFallbackWithoutContract(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPInnerGSOLatchedFallbackProductionGateArtifacts(t, dir)
+	if err := os.Remove(filepath.Join(dir, "inner-gso-latched-fallback-contract.txt")); err != nil {
+		t.Fatalf("remove inner-GSO latched-fallback contract: %v", err)
+	}
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES=inner-gso-latched-fallback="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted missing inner-GSO latched-fallback contract:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing inner-gso-latched-fallback-contract.txt artifact") {
+		t.Fatalf("production gate did not report missing inner-GSO latched-fallback contract:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSOAutomaticRecovery(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPInnerGSOLatchedFallbackProductionGateArtifacts(t, dir)
+	for _, node := range []string{"a", "b"} {
+		overrides := tixTCPInnerGSOLatchedFallbackModuleOverrides()
+		overrides["inner_gso_circuit_recoveries"] = "1"
+		writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", node, "module-parameters.txt"), true, overrides)
+	}
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES=inner-gso-latched-fallback="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted automatic inner-GSO recovery:\n%s", output)
+	}
+	if !strings.Contains(string(output), "inner_gso_circuit_recoveries") {
+		t.Fatalf("production gate did not report automatic inner-GSO recovery:\n%s", output)
 	}
 }
 
@@ -2582,6 +2942,56 @@ func writeIperfBidirJSON(t *testing.T, path string, sentBPS, receivedBPS, revers
 	}
 }
 
+func writeIperfBidirJSONWithIntervals(t *testing.T, path string, sentBPS, receivedBPS, reverseSentBPS, reverseReceivedBPS, seconds float64, reverseIntervals []float64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make iperf bidir artifact dir: %v", err)
+	}
+	intervals := make([]map[string]any, 0, len(reverseIntervals))
+	for _, reverseBPS := range reverseIntervals {
+		intervals = append(intervals, map[string]any{
+			"sum": map[string]any{
+				"bits_per_second": sentBPS,
+			},
+			"sum_bidir_reverse": map[string]any{
+				"bits_per_second": reverseBPS,
+			},
+		})
+	}
+	payload := map[string]any{
+		"end": map[string]any{
+			"sum_sent": map[string]any{
+				"bits_per_second": sentBPS,
+				"seconds":         seconds,
+				"sender":          true,
+			},
+			"sum_received": map[string]any{
+				"bits_per_second": receivedBPS,
+				"seconds":         seconds,
+				"sender":          true,
+			},
+			"sum_sent_bidir_reverse": map[string]any{
+				"bits_per_second": reverseSentBPS,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+			"sum_received_bidir_reverse": map[string]any{
+				"bits_per_second": reverseReceivedBPS,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+		},
+		"intervals": intervals,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal iperf bidir json with intervals: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write iperf bidir json with intervals: %v", err)
+	}
+}
+
 func writeResultMarker(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "case.result"), []byte("pass\n"), 0o644); err != nil {
@@ -2625,6 +3035,89 @@ func writeTextFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func writeInnerGSOLatchedFallbackContract(t *testing.T, dir string, beforeInner, afterInner int, status string) {
+	t.Helper()
+	writeTextFile(t, filepath.Join(dir, "inner-gso-latched-fallback-contract.txt"),
+		"format=trustix-inner-gso-latched-fallback-v1\n"+
+			"netem_active_seconds=10\n"+
+			"fallback_observe_seconds=90\n"+
+			"inner_gso_packets_before_clear="+strconv.Itoa(beforeInner)+"\n"+
+			"outer_gso_packets_before_clear=200\n"+
+			"plaintext_packets_before_clear=300\n"+
+			"circuit_trips_before_clear=2\n"+
+			"a_circuit_trips_before_clear=1\n"+
+			"b_circuit_trips_before_clear=1\n"+
+			"a_circuit_recoveries_before_clear=0\n"+
+			"b_circuit_recoveries_before_clear=0\n"+
+			"a_runtime_ready_before_clear=N\n"+
+			"b_runtime_ready_before_clear=N\n"+
+			"a_auto_recover_before_clear=N\n"+
+			"b_auto_recover_before_clear=N\n"+
+			"a_session_dials_before_apply=1\n"+
+			"b_session_dials_before_apply=1\n"+
+			"a_session_dials_before_clear=1\n"+
+			"b_session_dials_before_clear=1\n"+
+			"a_capability_withdrawals_before_clear=1\n"+
+			"b_capability_withdrawals_before_clear=1\n"+
+			"a_capability_withdrawal_acks_before_clear=1\n"+
+			"b_capability_withdrawal_acks_before_clear=1\n"+
+			"a_capability_withdrawal_ack_timeouts_before_clear=0\n"+
+			"b_capability_withdrawal_ack_timeouts_before_clear=0\n"+
+			"inner_gso_packets_after_clear="+strconv.Itoa(beforeInner)+"\n"+
+			"outer_gso_packets_after_clear=220\n"+
+			"plaintext_packets_after_clear=330\n"+
+			"circuit_recoveries_after_clear=0\n"+
+			"a_circuit_recoveries_after_clear=0\n"+
+			"b_circuit_recoveries_after_clear=0\n"+
+			"a_runtime_ready_after_clear=N\n"+
+			"b_runtime_ready_after_clear=N\n"+
+			"a_auto_recover_after_clear=N\n"+
+			"b_auto_recover_after_clear=N\n"+
+			"a_session_dials_after_clear=1\n"+
+			"b_session_dials_after_clear=1\n"+
+			"inner_gso_packets_after_observe="+strconv.Itoa(afterInner)+"\n"+
+			"outer_gso_packets_after_observe=250\n"+
+			"plaintext_packets_after_observe=400\n"+
+			"circuit_recoveries_after_observe=0\n"+
+			"a_circuit_recoveries_after_observe=0\n"+
+			"b_circuit_recoveries_after_observe=0\n"+
+			"a_runtime_ready_after_observe=N\n"+
+			"b_runtime_ready_after_observe=N\n"+
+			"a_auto_recover_after_observe=N\n"+
+			"b_auto_recover_after_observe=N\n"+
+			"a_session_dials_after_observe=1\n"+
+			"b_session_dials_after_observe=1\n"+
+			"status="+status+"\n")
+	writeTextFile(t, filepath.Join(dir, "netem-config.txt"),
+		"format=trustix-cross-host-netem-v1\n"+
+			"enabled=1\n"+
+			"targets=both\n"+
+			"loss_pct=1\n"+
+			"active_seconds=10\n"+
+			"require_inner_gso_latched_fallback=1\n"+
+			"inner_gso_latched_fallback_observe_seconds=90\n")
+	writeTextFile(t, filepath.Join(dir, "netem-evidence-before-clear.txt"),
+		"format=trustix-cross-host-netem-evidence-v1\n"+
+			"label=before-clear\n"+
+			"loss_pct=1\n"+
+			"a_targeted=1\n"+
+			"a_packets=1000\n"+
+			"a_drops=10\n"+
+			"b_targeted=1\n"+
+			"b_packets=2000\n"+
+			"b_drops=20\n"+
+			"status=pass\n")
+	writeTextFile(t, filepath.Join(dir, "a", "netem-qdisc-before-clear.txt"),
+		"qdisc netem 7e10: root refcnt 2 limit 262144 loss 1%\n"+
+			" Sent 1500000 bytes 1000 pkt (dropped 10, overlimits 0 requeues 0)\n")
+	writeTextFile(t, filepath.Join(dir, "b", "netem-qdisc-before-clear.txt"),
+		"qdisc netem 7e10: root refcnt 2 limit 262144 loss 1%\n"+
+			" Sent 3000000 bytes 2000 pkt (dropped 20, overlimits 0 requeues 0)\n")
+	writeTextFile(t, filepath.Join(dir, "netem-transition.txt"),
+		"scheduled_at=2026-08-10T00:00:00Z\n"+
+			"cleared_at=2026-08-10T00:00:10Z\n")
 }
 
 func writeKernelLogArtifacts(t *testing.T, dir string) {
@@ -2793,6 +3286,13 @@ func writeStableOSReleases(t *testing.T, dir string) {
 		writeTextFile(t, filepath.Join(dir, node, "os-release-before.txt"), value)
 		writeTextFile(t, filepath.Join(dir, node, "os-release-after.txt"), value)
 	}
+}
+
+func writeStableOpenWrtOSRelease(t *testing.T, dir, node string) {
+	t.Helper()
+	value := "PRETTY_NAME=\"OpenWrt 24.10.7\"\nNAME=\"OpenWrt\"\nID=openwrt\nVERSION_ID=\"24.10.7\"\n"
+	writeTextFile(t, filepath.Join(dir, node, "os-release-before.txt"), value)
+	writeTextFile(t, filepath.Join(dir, node, "os-release-after.txt"), value)
 }
 
 func writeDatapathJSON(t *testing.T, path string, fullPlaintextProvider int) {
@@ -3158,10 +3658,96 @@ func writeTIXTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provid
 		base := filepath.Join(dir, "collect", node)
 		writeTIXTCPFullKmodStatusJSON(t, filepath.Join(base, "status.json"))
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "tix-tcp-full-kmod-sha")
-		writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), provider)
-		writeTIXTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node)
+		writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), provider, false)
+		writeTIXTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node, false)
 		writeFullKmodModuleParametersWithOverrides(t, filepath.Join(base, "module-parameters.txt"), true, tixTCPFullKmodModuleOverrides(plaintextTraffic))
 	}
+}
+
+func writeTIXTCPInnerGSOProductionGateArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	for _, node := range []string{"a", "b"} {
+		base := filepath.Join(dir, "collect", node)
+		writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), true, true)
+		writeTIXTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node, true)
+		writeFullKmodModuleParametersWithOverrides(
+			t,
+			filepath.Join(base, "module-parameters.txt"),
+			true,
+			tixTCPInnerGSOHealthyModuleOverrides(),
+		)
+	}
+}
+
+func tixTCPInnerGSOHealthyModuleOverrides() map[string]string {
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	for name, value := range map[string]string{
+		"enable_features":                             "7296",
+		"features":                                    "7296",
+		"safe_features":                               "7296",
+		"tx_plaintext_inner_gso_attempts":             "128",
+		"tx_plaintext_inner_gso_packets":              "120",
+		"tx_plaintext_inner_gso_segments":             "960",
+		"tx_plaintext_inner_gso_fallbacks":            "0",
+		"rx_worker_inner_gso_candidates":              "120",
+		"rx_worker_inner_gso_packets":                 "118",
+		"rx_worker_inner_gso_segments":                "944",
+		"rx_worker_inner_gso_timeouts":                "7",
+		"inner_gso_runtime_faults":                    "7",
+		"inner_gso_circuit_trips":                     "0",
+		"inner_gso_timeout_circuit_trips":             "0",
+		"inner_gso_no_progress_circuit_trips":         "0",
+		"inner_gso_auto_recover":                      "N",
+		"inner_gso_runtime_ready":                     "Y",
+		"inner_gso_circuit_recoveries":                "0",
+		"inner_gso_timeout_ratio_suppressions":        "7",
+		"tx_plaintext_tix_tcp_ordered_xmits":          "256",
+		"tx_plaintext_tix_tcp_sequence_assign_errors": "0",
+	} {
+		overrides[name] = value
+	}
+	return overrides
+}
+
+func writeTIXTCPInnerGSOLatchedFallbackProductionGateArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	writeInnerGSOLatchedFallbackContract(t, dir, 100, 100, "pass")
+	for _, node := range []string{"a", "b"} {
+		writeFullKmodModuleParametersWithOverrides(
+			t,
+			filepath.Join(dir, "collect", node, "module-parameters.txt"),
+			true,
+			tixTCPInnerGSOLatchedFallbackModuleOverrides(),
+		)
+	}
+}
+
+func tixTCPInnerGSOLatchedFallbackModuleOverrides() map[string]string {
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	for name, value := range map[string]string{
+		"enable_features":                             "7296",
+		"features":                                    "7296",
+		"safe_features":                               "7296",
+		"tx_plaintext_inner_gso_attempts":             "128",
+		"tx_plaintext_inner_gso_packets":              "120",
+		"tx_plaintext_inner_gso_segments":             "960",
+		"tx_plaintext_inner_gso_fallbacks":            "0",
+		"rx_worker_inner_gso_candidates":              "120",
+		"rx_worker_inner_gso_packets":                 "118",
+		"rx_worker_inner_gso_segments":                "944",
+		"inner_gso_runtime_faults":                    "2",
+		"inner_gso_circuit_trips":                     "2",
+		"inner_gso_auto_recover":                      "N",
+		"inner_gso_runtime_ready":                     "N",
+		"inner_gso_circuit_recoveries":                "0",
+		"tx_plaintext_tix_tcp_ordered_xmits":          "256",
+		"tx_plaintext_tix_tcp_sequence_assign_errors": "0",
+	} {
+		overrides[name] = value
+	}
+	return overrides
 }
 
 func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
@@ -3234,7 +3820,7 @@ func writeTIXTCPFullKmodStatusJSON(t *testing.T, path string) {
 	}
 }
 
-func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextProvider bool) {
+func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextProvider, innerGSO bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make TIX-TCP full-kmod datapath dir: %v", err)
@@ -3258,7 +3844,7 @@ func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 			"capture_forwarder_suppressed": true,
 			"active_flows":                 16,
 			"inner_tcp_checksum_partial":   true,
-			"inner_gso":                    false,
+			"inner_gso":                    innerGSO,
 			"port_sharding":                true,
 		},
 	}
@@ -3271,8 +3857,12 @@ func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 	}
 }
 
-func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
+func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string, innerGSO bool) {
 	t.Helper()
+	innerGSONegotiated := 0
+	if innerGSO {
+		innerGSONegotiated = 1
+	}
 	writeTransportsJSONWithSessionStats(t, path, 16, "flow", true, 16, "tix_tcp", peerEndpointForNode(node, "-tix-tcp"), map[string]any{
 		"encryption":       "plaintext",
 		"bytes_sent":       0,
@@ -3281,9 +3871,9 @@ func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 		"packets_received": 0,
 		"extra": map[string]any{
 			"tix_tcp_full_plaintext_kernel_datapath": 1,
-			"tix_tcp_inner_gso_local":                0,
-			"tix_tcp_inner_gso_peer":                 0,
-			"tix_tcp_inner_gso_negotiated":           0,
+			"tix_tcp_inner_gso_local":                innerGSONegotiated,
+			"tix_tcp_inner_gso_peer":                 innerGSONegotiated,
+			"tix_tcp_inner_gso_negotiated":           innerGSONegotiated,
 			"tix_tcp_port_sharding_local":            1,
 			"tix_tcp_port_sharding_peer":             1,
 			"tix_tcp_port_sharding_negotiated":       1,

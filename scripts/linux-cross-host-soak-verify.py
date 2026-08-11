@@ -116,6 +116,12 @@ def parse_args() -> argparse.Namespace:
         help="minimum interval throughput as a ratio of --min-gbps for each validated iperf direction",
     )
     parser.add_argument(
+        "--max-consecutive-zero-iperf-intervals",
+        type=int,
+        default=0,
+        help="maximum consecutive zero or missing throughput intervals per iperf direction",
+    )
+    parser.add_argument(
         "--require-run-timing",
         action="store_true",
         help="require run-timing.json showing the measured long-test wall-clock window",
@@ -126,6 +132,11 @@ def parse_args() -> argparse.Namespace:
         default=[],
         metavar="KEY=VALUE",
         help="require every run-timing.json artifact to contain KEY equal to VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-inner-gso-latched-fallback-contract",
+        action="store_true",
+        help="require a staged netem artifact proving inner-GSO stays on reliable fallback after a runtime circuit trip",
     )
     parser.add_argument(
         "--require-iperf-pair-directions",
@@ -386,6 +397,13 @@ def parse_args() -> argparse.Namespace:
         help="require module-parameters.txt for NODE to contain numeric MODULE.PARAM <= VALUE; may be repeated",
     )
     parser.add_argument(
+        "--require-module-param-os-id-max",
+        action="append",
+        default=[],
+        metavar="OS_ID.MODULE.PARAM=VALUE",
+        help="require module-parameters.txt for every node with os-release ID=OS_ID to contain numeric MODULE.PARAM <= VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--min-module-parameters",
         type=int,
         default=0,
@@ -480,21 +498,42 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
     end = payload.get("end") or {}
     rows: list[dict[str, Any]] = []
 
-    def interval_stats() -> dict[str, Any]:
+    def interval_stats(summary_key: str) -> dict[str, Any]:
         intervals = payload.get("intervals") or []
         values: list[float] = []
         retransmits = 0
+        missing = 0
+        zero = 0
+        zero_run = 0
+        max_zero_run = 0
         for interval in intervals:
             if not isinstance(interval, dict):
+                missing += 1
+                zero_run += 1
+                max_zero_run = max(max_zero_run, zero_run)
                 continue
-            summary = interval.get("sum") or {}
+            summary = interval.get(summary_key) or {}
             if not isinstance(summary, dict):
+                missing += 1
+                zero_run += 1
+                max_zero_run = max(max_zero_run, zero_run)
                 continue
-            values.append(float(summary.get("bits_per_second") or 0) / 1e9)
+            value = float(summary.get("bits_per_second") or 0) / 1e9
+            values.append(value)
             retransmits += int(summary.get("retransmits") or 0)
+            if value <= 0:
+                zero += 1
+                zero_run += 1
+                max_zero_run = max(max_zero_run, zero_run)
+            else:
+                zero_run = 0
         if not values:
             return {
                 "intervals": 0,
+                "source_intervals": len(intervals),
+                "missing_intervals": missing,
+                "zero_intervals": zero,
+                "max_consecutive_zero_intervals": max_zero_run,
                 "min_gbps": 0.0,
                 "max_gbps": 0.0,
                 "first_10_avg_gbps": 0.0,
@@ -505,6 +544,10 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
         last = values[-10:]
         return {
             "intervals": len(values),
+            "source_intervals": len(intervals),
+            "missing_intervals": missing,
+            "zero_intervals": zero,
+            "max_consecutive_zero_intervals": max_zero_run,
             "min_gbps": min(values),
             "max_gbps": max(values),
             "first_10_avg_gbps": sum(first) / len(first),
@@ -512,14 +555,13 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
             "retransmits": retransmits,
         }
 
-    stats = interval_stats()
-
     def append_pair(
         direction: str,
         sent_key: str,
         received_key: str,
         *,
         default_require_received: bool,
+        interval_key: str,
     ) -> None:
         sent = end.get(sent_key) or {}
         received = end.get(received_key) or {}
@@ -537,6 +579,7 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
             # without a local receive aggregate. The client JSON still carries the
             # receiver aggregate, so do not reject a sender-only server artifact.
             received_required = False
+        stats = interval_stats(interval_key)
         rows.append(
             {
                 "direction": direction,
@@ -546,6 +589,12 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
                 "sent_required": sent_required,
                 "received_required": received_required,
                 "intervals": stats["intervals"],
+                "interval_source_count": stats["source_intervals"],
+                "interval_missing_count": stats["missing_intervals"],
+                "interval_zero_count": stats["zero_intervals"],
+                "interval_max_consecutive_zero": stats[
+                    "max_consecutive_zero_intervals"
+                ],
                 "interval_min_gbps": stats["min_gbps"],
                 "interval_max_gbps": stats["max_gbps"],
                 "interval_first_10_avg_gbps": stats["first_10_avg_gbps"],
@@ -555,12 +604,19 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
             }
         )
 
-    append_pair("forward", "sum_sent", "sum_received", default_require_received=True)
+    append_pair(
+        "forward",
+        "sum_sent",
+        "sum_received",
+        default_require_received=True,
+        interval_key="sum",
+    )
     append_pair(
         "reverse",
         "sum_sent_bidir_reverse",
         "sum_received_bidir_reverse",
         default_require_received=True,
+        interval_key="sum_bidir_reverse",
     )
     return rows
 
@@ -843,6 +899,367 @@ def parse_key_value_lines(value: str) -> dict[str, str]:
         if key:
             parsed[key] = val.strip()
     return parsed
+
+
+def validate_inner_gso_latched_fallback_contract(
+    case_dir: Path,
+    *,
+    required: bool,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    contract_path = case_dir / "inner-gso-latched-fallback-contract.txt"
+    errors: list[str] = []
+    if not contract_path.is_file():
+        if required:
+            errors.append("missing inner-gso-latched-fallback-contract.txt artifact")
+        return None, errors
+
+    try:
+        contract = parse_key_value_lines(
+            contract_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError as exc:
+        return None, [f"read inner-GSO latched-fallback contract: {exc}"]
+
+    if contract.get("format") != "trustix-inner-gso-latched-fallback-v1":
+        errors.append(
+            "inner-GSO latched-fallback contract has invalid format "
+            f"{contract.get('format')!r}"
+        )
+    if contract.get("status") != "pass":
+        errors.append(
+            "inner-GSO latched-fallback contract status is not pass: "
+            f"{contract.get('status')!r}"
+        )
+
+    numeric_names = (
+        "netem_active_seconds",
+        "fallback_observe_seconds",
+        "inner_gso_packets_before_clear",
+        "outer_gso_packets_before_clear",
+        "plaintext_packets_before_clear",
+        "circuit_trips_before_clear",
+        "a_circuit_trips_before_clear",
+        "b_circuit_trips_before_clear",
+        "a_circuit_recoveries_before_clear",
+        "b_circuit_recoveries_before_clear",
+        "a_session_dials_before_apply",
+        "b_session_dials_before_apply",
+        "a_session_dials_before_clear",
+        "b_session_dials_before_clear",
+        "a_capability_withdrawals_before_clear",
+        "b_capability_withdrawals_before_clear",
+        "a_capability_withdrawal_acks_before_clear",
+        "b_capability_withdrawal_acks_before_clear",
+        "a_capability_withdrawal_ack_timeouts_before_clear",
+        "b_capability_withdrawal_ack_timeouts_before_clear",
+        "inner_gso_packets_after_clear",
+        "outer_gso_packets_after_clear",
+        "plaintext_packets_after_clear",
+        "circuit_recoveries_after_clear",
+        "a_circuit_recoveries_after_clear",
+        "b_circuit_recoveries_after_clear",
+        "a_session_dials_after_clear",
+        "b_session_dials_after_clear",
+        "inner_gso_packets_after_observe",
+        "outer_gso_packets_after_observe",
+        "plaintext_packets_after_observe",
+        "circuit_recoveries_after_observe",
+        "a_circuit_recoveries_after_observe",
+        "b_circuit_recoveries_after_observe",
+        "a_session_dials_after_observe",
+        "b_session_dials_after_observe",
+    )
+    numeric: dict[str, int] = {}
+    for name in numeric_names:
+        raw = contract.get(name, "")
+        if not re.fullmatch(r"[0-9]+", raw):
+            errors.append(
+                f"inner-GSO latched-fallback contract {name}={raw!r} is not an integer"
+            )
+            continue
+        numeric[name] = int(raw)
+
+    for name in (
+        "netem_active_seconds",
+        "fallback_observe_seconds",
+        "inner_gso_packets_before_clear",
+        "outer_gso_packets_before_clear",
+        "plaintext_packets_before_clear",
+        "circuit_trips_before_clear",
+    ):
+        if name in numeric and numeric[name] <= 0:
+            errors.append(
+                f"inner-GSO latched-fallback contract {name}={numeric[name]}, want > 0"
+            )
+
+    state_names = (
+        "a_runtime_ready_before_clear",
+        "b_runtime_ready_before_clear",
+        "a_auto_recover_before_clear",
+        "b_auto_recover_before_clear",
+        "a_runtime_ready_after_clear",
+        "b_runtime_ready_after_clear",
+        "a_auto_recover_after_clear",
+        "b_auto_recover_after_clear",
+        "a_runtime_ready_after_observe",
+        "b_runtime_ready_after_observe",
+        "a_auto_recover_after_observe",
+        "b_auto_recover_after_observe",
+    )
+    for name in state_names:
+        if contract.get(name) != "N":
+            errors.append(
+                f"inner-GSO latched-fallback contract {name}={contract.get(name)!r}, want 'N'"
+            )
+
+    clear_inner = numeric.get("inner_gso_packets_after_clear")
+    observed_inner = numeric.get("inner_gso_packets_after_observe")
+    if clear_inner is not None and observed_inner is not None and observed_inner != clear_inner:
+        errors.append(
+            "inner-GSO packet counter grew after the circuit was latched: "
+            f"{clear_inner} -> {observed_inner}"
+        )
+    for counter in ("outer_gso_packets", "plaintext_packets"):
+        after_clear = numeric.get(f"{counter}_after_clear")
+        after_observe = numeric.get(f"{counter}_after_observe")
+        if (
+            after_clear is not None
+            and after_observe is not None
+            and after_observe <= after_clear
+        ):
+            errors.append(
+                f"reliable fallback {counter} did not grow after clear: "
+                f"{after_clear} -> {after_observe}"
+            )
+
+    for name in (
+        "a_circuit_recoveries_before_clear",
+        "b_circuit_recoveries_before_clear",
+        "circuit_recoveries_after_clear",
+        "a_circuit_recoveries_after_clear",
+        "b_circuit_recoveries_after_clear",
+        "circuit_recoveries_after_observe",
+        "a_circuit_recoveries_after_observe",
+        "b_circuit_recoveries_after_observe",
+    ):
+        if name in numeric and numeric[name] != 0:
+            errors.append(
+                f"inner-GSO latched-fallback contract {name}={numeric[name]}, want 0"
+            )
+
+    for node in ("a", "b"):
+        trips = numeric.get(f"{node}_circuit_trips_before_clear")
+        if trips is not None and trips <= 0:
+            errors.append(
+                f"inner-GSO latched-fallback node {node} circuit trips={trips}, want > 0"
+            )
+        before_apply = numeric.get(f"{node}_session_dials_before_apply")
+        before_clear = numeric.get(f"{node}_session_dials_before_clear")
+        after_clear = numeric.get(f"{node}_session_dials_after_clear")
+        after_observe = numeric.get(f"{node}_session_dials_after_observe")
+        dials = (before_apply, before_clear, after_clear, after_observe)
+        if all(value is not None for value in dials) and len(set(dials)) != 1:
+            errors.append(
+                f"inner-GSO latched fallback re-dialed node {node} sessions: "
+                f"{before_apply} -> {before_clear} -> {after_clear} -> {after_observe}"
+            )
+        withdrawals = numeric.get(f"{node}_capability_withdrawals_before_clear")
+        withdrawal_acks = numeric.get(
+            f"{node}_capability_withdrawal_acks_before_clear"
+        )
+        withdrawal_ack_timeouts = numeric.get(
+            f"{node}_capability_withdrawal_ack_timeouts_before_clear"
+        )
+        if withdrawals is not None and withdrawals <= 0:
+            errors.append(
+                f"inner-GSO latched-fallback node {node} capability withdrawals="
+                f"{withdrawals}, want > 0"
+            )
+        if (
+            withdrawals is not None
+            and withdrawal_acks is not None
+            and withdrawal_acks < withdrawals
+        ):
+            errors.append(
+                f"inner-GSO latched-fallback node {node} withdrawal ACKs="
+                f"{withdrawal_acks}, want >= withdrawals={withdrawals}"
+            )
+        if withdrawal_ack_timeouts is not None and withdrawal_ack_timeouts != 0:
+            errors.append(
+                f"inner-GSO latched-fallback node {node} withdrawal ACK timeouts="
+                f"{withdrawal_ack_timeouts}, want 0"
+            )
+
+    netem_path = case_dir / "netem-config.txt"
+    netem: dict[str, str] = {}
+    if not netem_path.is_file():
+        errors.append("missing netem-config.txt for inner-GSO latched-fallback contract")
+    else:
+        try:
+            netem = parse_key_value_lines(
+                netem_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError as exc:
+            errors.append(f"read netem config for inner-GSO latched fallback: {exc}")
+        for name, expected in (
+            ("format", "trustix-cross-host-netem-v1"),
+            ("enabled", "1"),
+            ("require_inner_gso_latched_fallback", "1"),
+        ):
+            if netem.get(name) != expected:
+                errors.append(
+                    f"inner-GSO latched-fallback netem {name}="
+                    f"{netem.get(name)!r}, want {expected!r}"
+                )
+        for contract_name, netem_name in (
+            ("netem_active_seconds", "active_seconds"),
+            (
+                "fallback_observe_seconds",
+                "inner_gso_latched_fallback_observe_seconds",
+            ),
+        ):
+            raw = netem.get(netem_name, "")
+            if not re.fullmatch(r"[1-9][0-9]*", raw):
+                errors.append(
+                    f"inner-GSO latched-fallback netem {netem_name}={raw!r}, want > 0"
+                )
+            if (
+                contract_name in numeric
+                and re.fullmatch(r"[0-9]+", raw)
+                and int(raw) != numeric[contract_name]
+            ):
+                errors.append(
+                    f"inner-GSO latched-fallback contract {contract_name}="
+                    f"{numeric[contract_name]} does not match netem {netem_name}={raw}"
+                )
+
+    evidence_path = case_dir / "netem-evidence-before-clear.txt"
+    evidence: dict[str, str] = {}
+    if not evidence_path.is_file():
+        errors.append(
+            "missing netem-evidence-before-clear.txt for inner-GSO latched-fallback contract"
+        )
+    else:
+        try:
+            evidence = parse_key_value_lines(
+                evidence_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError as exc:
+            errors.append(f"read inner-GSO latched-fallback netem evidence: {exc}")
+        for name, expected in (
+            ("format", "trustix-cross-host-netem-evidence-v1"),
+            ("label", "before-clear"),
+            ("status", "pass"),
+        ):
+            if evidence.get(name) != expected:
+                errors.append(
+                    f"inner-GSO latched-fallback netem evidence {name}="
+                    f"{evidence.get(name)!r}, want {expected!r}"
+                )
+
+        targets = netem.get("targets", "")
+        if targets not in {"a", "b", "both"}:
+            errors.append(
+                f"inner-GSO latched-fallback netem targets={targets!r}, "
+                "want 'a', 'b', or 'both'"
+            )
+        try:
+            loss_positive = float(netem.get("loss_pct", "")) > 0
+        except ValueError:
+            loss_positive = False
+            errors.append(
+                "inner-GSO latched-fallback netem loss_pct="
+                f"{netem.get('loss_pct')!r} is not numeric"
+            )
+        qdisc_by_node = {
+            path.parent.name: path
+            for path in case_dir.rglob("netem-qdisc-before-clear.txt")
+            if path.parent.name in {"a", "b"}
+        }
+        for node in ("a", "b"):
+            targeted = targets == "both" or targets == node
+            expected_targeted = "1" if targeted else "0"
+            if evidence.get(f"{node}_targeted") != expected_targeted:
+                errors.append(
+                    f"inner-GSO latched-fallback netem evidence {node}_targeted="
+                    f"{evidence.get(f'{node}_targeted')!r}, want {expected_targeted!r}"
+                )
+            node_values: dict[str, int] = {}
+            for metric in ("packets", "drops"):
+                name = f"{node}_{metric}"
+                raw = evidence.get(name, "")
+                if not re.fullmatch(r"[0-9]+", raw):
+                    errors.append(
+                        f"inner-GSO latched-fallback netem evidence {name}="
+                        f"{raw!r} is not an integer"
+                    )
+                    continue
+                node_values[metric] = int(raw)
+            if not targeted:
+                continue
+            if node_values.get("packets", 0) <= 0:
+                errors.append(
+                    f"inner-GSO latched-fallback netem node {node} processed no packets"
+                )
+            if loss_positive and node_values.get("drops", 0) <= 0:
+                errors.append(
+                    f"inner-GSO latched-fallback netem node {node} observed no drops"
+                )
+            qdisc_path = qdisc_by_node.get(node)
+            if qdisc_path is None:
+                errors.append(
+                    f"missing node {node} netem-qdisc-before-clear.txt artifact"
+                )
+                continue
+            try:
+                qdisc_text = qdisc_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                errors.append(f"read node {node} netem qdisc evidence: {exc}")
+                continue
+            qdisc_match = re.search(
+                r"(?m)^qdisc netem 7e10:.*\n Sent [0-9]+ bytes "
+                r"([0-9]+) pkt \(dropped ([0-9]+),",
+                qdisc_text,
+            )
+            if qdisc_match is None:
+                errors.append(
+                    f"node {node} netem-qdisc-before-clear.txt lacks active netem counters"
+                )
+                continue
+            qdisc_packets, qdisc_drops = map(int, qdisc_match.groups())
+            if node_values.get("packets") != qdisc_packets:
+                errors.append(
+                    f"node {node} netem packet evidence mismatch: "
+                    f"contract={node_values.get('packets')} qdisc={qdisc_packets}"
+                )
+            if node_values.get("drops") != qdisc_drops:
+                errors.append(
+                    f"node {node} netem drop evidence mismatch: "
+                    f"contract={node_values.get('drops')} qdisc={qdisc_drops}"
+                )
+
+    transition_path = case_dir / "netem-transition.txt"
+    transition: dict[str, str] = {}
+    if not transition_path.is_file():
+        errors.append("missing netem-transition.txt for inner-GSO latched fallback")
+    else:
+        try:
+            transition = parse_key_value_lines(
+                transition_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError as exc:
+            errors.append(f"read netem transition for inner-GSO latched fallback: {exc}")
+        if not transition.get("cleared_at"):
+            errors.append("inner-GSO latched-fallback transition is missing cleared_at")
+
+    return {
+        "source": contract_path.name,
+        "values": contract,
+        "numeric": numeric,
+        "netem": netem,
+        "netem_evidence": evidence,
+        "transition": transition,
+    }, errors
 
 
 def collect_lan_state_artifacts(case_dir: Path) -> list[dict[str, Any]]:
@@ -1467,6 +1884,35 @@ def parse_required_node_numeric_limits(
     return required
 
 
+def parse_required_os_id_numeric_limits(
+    raw_items: list[str], flag: str
+) -> list[tuple[str, str, float]]:
+    required: list[tuple[str, str, float]] = []
+    for raw in raw_items:
+        path, sep, value = raw.partition("=")
+        path = path.strip()
+        value = value.strip()
+        os_id, dot, dotted_path = path.partition(".")
+        os_id = os_id.strip().casefold()
+        dotted_path = dotted_path.strip()
+        if (
+            not sep
+            or not dot
+            or not os_id
+            or not dotted_path
+            or "." not in dotted_path
+        ):
+            raise SystemExit(
+                f"invalid {flag} {raw!r}; expected OS_ID.MODULE.PARAM=VALUE"
+            )
+        try:
+            numeric = float(value)
+        except ValueError as exc:
+            raise SystemExit(f"invalid {flag} {raw!r}; VALUE must be numeric") from exc
+        required.append((os_id, dotted_path, numeric))
+    return required
+
+
 def datapath_value(payload: Any, dotted_path: str) -> Any:
     current = payload
     for part in dotted_path.split("."):
@@ -1685,10 +2131,12 @@ def module_parameter_value(modules: dict[str, dict[str, str]], dotted_path: str)
 def validate_module_parameters(
     case_dir: Path,
     *,
+    os_release_artifacts: list[dict[str, Any]],
     required_minima: list[tuple[str, float]],
     required_any_minima: list[tuple[str, float]],
     required_maxima: list[tuple[str, float]],
     required_node_maxima: list[tuple[str, str, float]],
+    required_os_id_maxima: list[tuple[str, str, float]],
     min_module_parameters: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     files = sorted(case_dir.rglob("module-parameters.txt"))
@@ -1700,6 +2148,22 @@ def validate_module_parameters(
     node_hits: dict[tuple[str, str], bool] = {
         (node, dotted_path): False for node, dotted_path, _ in required_node_maxima
     }
+    node_os_ids: dict[str, set[str]] = {}
+    for artifact in os_release_artifacts:
+        node = str(artifact.get("node") or "")
+        os_id = str(artifact.get("id") or "").strip().casefold()
+        if node and os_id:
+            node_os_ids.setdefault(node, set()).add(os_id)
+    os_id_target_nodes: dict[tuple[str, str], set[str]] = {
+        (os_id, dotted_path): {
+            node for node, ids in node_os_ids.items() if os_id in ids
+        }
+        for os_id, dotted_path, _ in required_os_id_maxima
+    }
+    os_id_hit_nodes: dict[tuple[str, str], set[str]] = {
+        (os_id, dotted_path): set()
+        for os_id, dotted_path, _ in required_os_id_maxima
+    }
     if len(files) < min_module_parameters:
         errors.append(
             f"found {len(files)} module-parameters.txt files, want >= {min_module_parameters}"
@@ -1709,6 +2173,7 @@ def validate_module_parameters(
         or required_any_minima
         or required_maxima
         or required_node_maxima
+        or required_os_id_maxima
     ) and not files:
         return rows, errors, len(files)
     for path in files:
@@ -1788,6 +2253,32 @@ def validate_module_parameters(
                 errors.append(
                     f"{rel}: module parameter {required_node}.{dotted_path}={actual_number:g}, want <= {maximum:g}"
                 )
+        for required_os_id, dotted_path, maximum in required_os_id_maxima:
+            if required_os_id not in node_os_ids.get(node, set()):
+                continue
+            os_id_hit_nodes[(required_os_id, dotted_path)].add(node)
+            try:
+                actual = module_parameter_value(modules, dotted_path)
+            except KeyError:
+                errors.append(
+                    f"{rel}: missing module parameter for OS ID {required_os_id!r}: "
+                    f"{dotted_path!r}"
+                )
+                continue
+            values[f"os-id:{required_os_id}.{dotted_path}"] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{rel}: module parameter for OS ID {required_os_id!r} "
+                    f"{dotted_path}={actual!r} is not numeric"
+                )
+                continue
+            if actual_number > maximum:
+                errors.append(
+                    f"{rel}: module parameter for OS ID {required_os_id!r} "
+                    f"{dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
         if values:
             rows.append({"file": rel, "values": values})
     for dotted_path, minimum in required_any_minima:
@@ -1799,6 +2290,17 @@ def validate_module_parameters(
         if not node_hits.get((node, dotted_path), False):
             errors.append(
                 f"no collected module parameters for node {node!r} contained {dotted_path!r}"
+            )
+    for os_id, dotted_path, _ in required_os_id_maxima:
+        target_nodes = os_id_target_nodes.get((os_id, dotted_path), set())
+        if not target_nodes:
+            errors.append(f"no collected os-release artifact has ID={os_id!r}")
+            continue
+        missing_nodes = target_nodes - os_id_hit_nodes.get((os_id, dotted_path), set())
+        for node in sorted(missing_nodes):
+            errors.append(
+                f"no collected module parameters for OS ID {os_id!r} node {node!r} "
+                f"contained {dotted_path!r}"
             )
     return rows, errors, len(files)
 
@@ -2077,8 +2579,10 @@ def validate_case(
     min_iperf_json: int,
     min_iperf_intervals: int,
     min_iperf_interval_gbps_ratio: float,
+    max_consecutive_zero_iperf_intervals: int,
     require_run_timing: bool,
     required_run_timing_stats: list[tuple[str, str]],
+    require_inner_gso_latched_fallback_contract: bool,
     require_iperf_pair_directions: bool,
     require_result_marker: bool,
     log_scan: bool,
@@ -2121,6 +2625,7 @@ def validate_case(
     required_module_param_any_minima: list[tuple[str, float]],
     required_module_param_maxima: list[tuple[str, float]],
     required_module_param_node_maxima: list[tuple[str, str, float]],
+    required_module_param_os_id_maxima: list[tuple[str, str, float]],
     min_module_parameters: int,
     required_transport_policy_stats: list[tuple[str, str]],
     required_transport_policy_minima: list[tuple[str, float]],
@@ -2152,6 +2657,13 @@ def validate_case(
         required_stats=required_run_timing_stats,
     )
     errors.extend(run_timing_errors)
+    inner_gso_latched_fallback, inner_gso_latched_fallback_errors = (
+        validate_inner_gso_latched_fallback_contract(
+            case.path,
+            required=require_inner_gso_latched_fallback_contract,
+        )
+    )
+    errors.extend(inner_gso_latched_fallback_errors)
 
     iperf_files = sorted(
         path
@@ -2206,6 +2718,18 @@ def validate_case(
                     "sent_required": sent_required,
                     "received_required": received_required,
                     "intervals": int(item.get("intervals") or 0),
+                    "interval_source_count": int(
+                        item.get("interval_source_count") or 0
+                    ),
+                    "interval_missing_count": int(
+                        item.get("interval_missing_count") or 0
+                    ),
+                    "interval_zero_count": int(
+                        item.get("interval_zero_count") or 0
+                    ),
+                    "interval_max_consecutive_zero": int(
+                        item.get("interval_max_consecutive_zero") or 0
+                    ),
                     "interval_min_gbps": round(float(item.get("interval_min_gbps") or 0), 6),
                     "interval_max_gbps": round(float(item.get("interval_max_gbps") or 0), 6),
                     "interval_first_10_avg_gbps": round(
@@ -2229,6 +2753,9 @@ def validate_case(
                 )
             intervals = int(item.get("intervals") or 0)
             interval_min_gbps = float(item.get("interval_min_gbps") or 0)
+            interval_max_zero = int(
+                item.get("interval_max_consecutive_zero") or 0
+            )
             if min_iperf_intervals > 0 and intervals < min_iperf_intervals:
                 errors.append(
                     f"{label}: interval count {intervals}, want >= {min_iperf_intervals}"
@@ -2238,6 +2765,11 @@ def validate_case(
                 errors.append(
                     f"{label}: interval min {interval_min_gbps:.3f}Gbps < "
                     f"{interval_floor:.3f}Gbps"
+                )
+            if interval_max_zero > max_consecutive_zero_iperf_intervals:
+                errors.append(
+                    f"{label}: consecutive zero/missing intervals {interval_max_zero}, "
+                    f"want <= {max_consecutive_zero_iperf_intervals}"
                 )
     if len(iperf_files) < min_iperf_json and len(iperf_results) < min_iperf_json:
         errors.append(
@@ -2385,10 +2917,12 @@ def validate_case(
     errors.extend(datapath_stat_errors)
     module_param_results, module_param_errors, module_param_count = validate_module_parameters(
         case.path,
+        os_release_artifacts=os_release_artifacts,
         required_minima=required_module_param_minima,
         required_any_minima=required_module_param_any_minima,
         required_maxima=required_module_param_maxima,
         required_node_maxima=required_module_param_node_maxima,
+        required_os_id_maxima=required_module_param_os_id_maxima,
         min_module_parameters=min_module_parameters,
     )
     errors.extend(module_param_errors)
@@ -2425,7 +2959,11 @@ def validate_case(
         "seconds_slop": seconds_slop,
         "min_iperf_intervals_required": min_iperf_intervals,
         "min_iperf_interval_gbps_ratio_required": min_iperf_interval_gbps_ratio,
+        "max_consecutive_zero_iperf_intervals_allowed": (
+            max_consecutive_zero_iperf_intervals
+        ),
         "run_timing": run_timing,
+        "inner_gso_latched_fallback": inner_gso_latched_fallback,
         "iperf_json_count": len(iperf_files),
         "iperf_direction_count": len(iperf_results),
         "iperf_pair_directions": sorted(iperf_pair_directions),
@@ -2490,6 +3028,10 @@ def main() -> int:
         raise SystemExit("--min-iperf-intervals must be non-negative")
     if args.min_iperf_interval_gbps_ratio < 0:
         raise SystemExit("--min-iperf-interval-gbps-ratio must be non-negative")
+    if args.max_consecutive_zero_iperf_intervals < 0:
+        raise SystemExit(
+            "--max-consecutive-zero-iperf-intervals must be non-negative"
+        )
     if args.min_kernel_log_artifacts < 0:
         raise SystemExit("--min-kernel-log-artifacts must be non-negative")
     if args.min_kernel_log_nodes < 0:
@@ -2560,6 +3102,10 @@ def main() -> int:
         args.require_module_param_node_max,
         "--require-module-param-node-max",
     )
+    required_module_param_os_id_maxima = parse_required_os_id_numeric_limits(
+        args.require_module_param_os_id_max,
+        "--require-module-param-os-id-max",
+    )
     required_transport_policy_stats = parse_required_datapath_stats(
         args.require_transport_policy_stat,
         "--require-transport-policy-stat",
@@ -2621,6 +3167,7 @@ def main() -> int:
         or required_module_param_any_minima
         or required_module_param_maxima
         or required_module_param_node_maxima
+        or required_module_param_os_id_maxima
     ) and min_module_parameters == 0:
         min_module_parameters = 2
     min_transports_json = args.min_transports_json
@@ -2645,10 +3192,16 @@ def main() -> int:
             min_iperf_json=args.min_iperf_json,
             min_iperf_intervals=args.min_iperf_intervals,
             min_iperf_interval_gbps_ratio=args.min_iperf_interval_gbps_ratio,
+            max_consecutive_zero_iperf_intervals=(
+                args.max_consecutive_zero_iperf_intervals
+            ),
             require_run_timing=args.require_run_timing,
             required_run_timing_stats=parse_required_datapath_stats(
                 args.require_run_timing_stat,
                 "--require-run-timing-stat",
+            ),
+            require_inner_gso_latched_fallback_contract=(
+                args.require_inner_gso_latched_fallback_contract
             ),
             require_iperf_pair_directions=args.require_iperf_pair_directions,
             require_result_marker=not args.no_result_marker,
@@ -2692,6 +3245,7 @@ def main() -> int:
             required_module_param_any_minima=required_module_param_any_minima,
             required_module_param_maxima=required_module_param_maxima,
             required_module_param_node_maxima=required_module_param_node_maxima,
+            required_module_param_os_id_maxima=required_module_param_os_id_maxima,
             min_module_parameters=min_module_parameters,
             required_transport_policy_stats=required_transport_policy_stats,
             required_transport_policy_minima=required_transport_policy_minima,

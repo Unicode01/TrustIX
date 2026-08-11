@@ -10,6 +10,8 @@ userspace_tc_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gb
 tc_direct_min_gbps="${TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}}"
 full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
 tix_tcp_full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}}"
+tix_tcp_inner_gso_min_gbps="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_MIN_GBPS:-${gate_min_gbps:-4}}"
+tix_tcp_inner_gso_latched_fallback_min_gbps="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_MIN_GBPS:-${gate_min_gbps:-4}}"
 secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}}"
 secure_tix_tcp_kernel_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS:-${gate_min_gbps:-1.5}}"
 route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
@@ -17,6 +19,9 @@ min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-3600}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
 min_iperf_intervals="${TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS:-600}"
 min_interval_gbps_ratio="${TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO:-0.25}"
+max_consecutive_zero_intervals="${TRUSTIX_CROSS_HOST_GATE_MAX_CONSECUTIVE_ZERO_INTERVALS:-0}"
+required_iperf_mode="${TRUSTIX_CROSS_HOST_GATE_IPERF_MODE:-forward}"
+required_iperf_directions="${TRUSTIX_CROSS_HOST_GATE_IPERF_DIRECTIONS:-both}"
 min_host_cpus="${TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS:-4}"
 forbidden_host_net_drivers="${TRUSTIX_CROSS_HOST_GATE_FORBID_HOST_NET_DRIVER:-e1000 e1000e rtl8139 8139cp 8139too pcnet32 ne2k_pci}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
@@ -55,16 +60,22 @@ dd_route_gso="${TRUSTIX_CROSS_HOST_DD_ROUTE_GSO:-}"
 owdeb_route_gso="${TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO:-}"
 full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASES:-}"
 tix_tcp_full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES:-}"
+tix_tcp_inner_gso_cases_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES:-}"
+tix_tcp_inner_gso_latched_fallback_cases_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES:-}"
 secure_kudp_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES:-}"
 secure_tix_tcp_kernel_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES:-}"
 route_gso_cases_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES:-}"
 full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS:-}"
 tix_tcp_full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS:-}"
+tix_tcp_inner_gso_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS:-}"
+tix_tcp_inner_gso_latched_fallback_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_GBPS:-}"
 secure_kudp_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS:-}"
 secure_tix_tcp_kernel_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS:-}"
 route_gso_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS:-}"
 full_kmod_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS:-}"
 tix_tcp_full_kmod_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS:-}"
+tix_tcp_inner_gso_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS:-}"
+tix_tcp_inner_gso_latched_fallback_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_SECONDS:-}"
 secure_kudp_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS:-}"
 secure_tix_tcp_kernel_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS:-}"
 route_gso_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS:-}"
@@ -338,7 +349,7 @@ case_session_args() {
       placement="userspace"
       require_session_traffic=0
       ;;
-    tix-tcp-full-kmod)
+    tix-tcp-full-kmod|tix-tcp-inner-gso|tix-tcp-inner-gso-latched-fallback)
       transport="tix_tcp"
       encryption="plaintext"
       profile="performance"
@@ -400,7 +411,7 @@ case_session_args() {
       --require-transport-session-stat "stats.receive_encrypted=true" \
       --require-transport-session-stat "stats.crypto_placement=${placement}"
   fi
-  if [[ "$family" == "tix-tcp-full-kmod" ]]; then
+  if [[ "$family" == "tix-tcp-full-kmod" || "$family" == "tix-tcp-inner-gso" || "$family" == "tix-tcp-inner-gso-latched-fallback" ]]; then
     printf '%s\n' \
       --require-transport-session-stat "stats.extra.tix_tcp_full_plaintext_kernel_datapath=1" \
       --require-transport-session-any-min "stats.packets_sent=1"
@@ -444,11 +455,11 @@ case_module_param_args() {
       route_tcp_helper_capability_args
       return 0
       ;;
-    full-kmod|tix-tcp-full-kmod) ;;
+    full-kmod|tix-tcp-full-kmod|tix-tcp-inner-gso|tix-tcp-inner-gso-latched-fallback) ;;
     *) return 0 ;;
   esac
   if case_is_openwrt_debian "$case_token"; then
-    printf '%s\n' --require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0
+    printf '%s\n' --require-module-param-os-id-max openwrt.trustix_datapath.rx_worker_single_coalesce=0
   else
     printf '%s\n' --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32
   fi
@@ -461,11 +472,16 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_SECONDS_SLOP="$seconds_slop" \
   TRUSTIX_GATE_MANIFEST_MIN_IPERF_INTERVALS="$min_iperf_intervals" \
   TRUSTIX_GATE_MANIFEST_MIN_INTERVAL_GBPS_RATIO="$min_interval_gbps_ratio" \
+  TRUSTIX_GATE_MANIFEST_MAX_CONSECUTIVE_ZERO_INTERVALS="$max_consecutive_zero_intervals" \
+  TRUSTIX_GATE_MANIFEST_IPERF_MODE="$required_iperf_mode" \
+  TRUSTIX_GATE_MANIFEST_IPERF_DIRECTIONS="$required_iperf_directions" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_MIN_GBPS="$userspace_min_gbps" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS="$userspace_tc_min_gbps" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS="$tc_direct_min_gbps" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS="$full_kmod_min_gbps" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_GBPS="$tix_tcp_full_kmod_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_MIN_GBPS="$tix_tcp_inner_gso_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_MIN_GBPS="$tix_tcp_inner_gso_latched_fallback_min_gbps" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS="$secure_kudp_min_gbps" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_GBPS="$secure_tix_tcp_kernel_min_gbps" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS="$route_gso_min_gbps" \
@@ -490,6 +506,8 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES="$tc_direct_cases" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES="$full_kmod_cases" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASES="$tix_tcp_full_kmod_cases" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASES="$tix_tcp_inner_gso_cases" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES="$tix_tcp_inner_gso_latched_fallback_cases" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES="$secure_kudp_cases" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASES="$secure_tix_tcp_kernel_cases" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES="$route_gso_cases" \
@@ -498,6 +516,8 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS="$tc_direct_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS="$full_kmod_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS="$tix_tcp_full_kmod_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS="$tix_tcp_inner_gso_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_GBPS="$tix_tcp_inner_gso_latched_fallback_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS="$secure_kudp_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS="$secure_tix_tcp_kernel_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS="$route_gso_case_min_gbps_raw" \
@@ -506,6 +526,8 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_SECONDS="$tc_direct_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_SECONDS="$full_kmod_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS="$tix_tcp_full_kmod_case_min_seconds_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS="$tix_tcp_inner_gso_case_min_seconds_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_SECONDS="$tix_tcp_inner_gso_latched_fallback_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_SECONDS="$secure_kudp_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS="$secure_tix_tcp_kernel_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_SECONDS="$route_gso_case_min_seconds_raw" \
@@ -538,11 +560,16 @@ manifest = {
         "seconds_slop": env["TRUSTIX_GATE_MANIFEST_SECONDS_SLOP"],
         "min_iperf_intervals": env["TRUSTIX_GATE_MANIFEST_MIN_IPERF_INTERVALS"],
         "min_interval_gbps_ratio": env["TRUSTIX_GATE_MANIFEST_MIN_INTERVAL_GBPS_RATIO"],
+        "max_consecutive_zero_intervals": env["TRUSTIX_GATE_MANIFEST_MAX_CONSECUTIVE_ZERO_INTERVALS"],
+        "iperf_mode": env["TRUSTIX_GATE_MANIFEST_IPERF_MODE"],
+        "iperf_directions": env["TRUSTIX_GATE_MANIFEST_IPERF_DIRECTIONS"],
         "userspace_min_gbps": env["TRUSTIX_GATE_MANIFEST_USERSPACE_MIN_GBPS"],
         "userspace_tc_min_gbps": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS"],
         "tc_direct_min_gbps": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS"],
         "full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS"],
         "tix_tcp_full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_GBPS"],
+        "tix_tcp_inner_gso_min_gbps": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_MIN_GBPS"],
+        "tix_tcp_inner_gso_latched_fallback_min_gbps": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_MIN_GBPS"],
         "secure_kudp_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS"],
         "secure_tix_tcp_kernel_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_GBPS"],
         "route_gso_min_gbps": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS"],
@@ -569,6 +596,8 @@ manifest = {
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES"],
         "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASES"],
+        "tix_tcp_inner_gso": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASES"],
+        "tix_tcp_inner_gso_latched_fallback": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES"],
         "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASES"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES"],
@@ -579,6 +608,8 @@ manifest = {
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS"],
         "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS"],
+        "tix_tcp_inner_gso": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS"],
+        "tix_tcp_inner_gso_latched_fallback": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_GBPS"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS"],
         "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS"],
@@ -589,6 +620,8 @@ manifest = {
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_SECONDS"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_SECONDS"],
         "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS"],
+        "tix_tcp_inner_gso": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS"],
+        "tix_tcp_inner_gso_latched_fallback": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_SECONDS"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_SECONDS"],
         "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_SECONDS"],
@@ -607,8 +640,9 @@ run_gate() {
   shift 3
   set -- --min-gbps "$category_min_gbps" --min-seconds "$case_min_seconds" --seconds-slop "$seconds_slop" \
     --min-iperf-intervals "$min_iperf_intervals" \
-    --min-iperf-interval-gbps-ratio "$min_interval_gbps_ratio" "$@"
-  set -- "$@" --require-run-timing --require-run-timing-stat iperf_mode=forward --require-run-timing-stat iperf_directions=both --require-binary-identity --require-strong-build-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2 --require-lsmod-artifacts --min-lsmod-nodes 2 --require-lan-state-artifacts --min-lan-state-nodes 2 --min-lan-tx-queue-len 1 --require-host-state-artifacts --min-host-state-nodes 2 --min-host-cpus "$min_host_cpus"
+    --min-iperf-interval-gbps-ratio "$min_interval_gbps_ratio" \
+    --max-consecutive-zero-iperf-intervals "$max_consecutive_zero_intervals" "$@"
+  set -- "$@" --require-run-timing --require-run-timing-stat "iperf_mode=${required_iperf_mode}" --require-run-timing-stat "iperf_directions=${required_iperf_directions}" --require-binary-identity --require-strong-build-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2 --require-lsmod-artifacts --min-lsmod-nodes 2 --require-lan-state-artifacts --min-lan-state-nodes 2 --min-lan-tx-queue-len 1 --require-host-state-artifacts --min-host-state-nodes 2 --min-host-cpus "$min_host_cpus"
   for driver in $forbidden_host_net_drivers; do
     set -- "$@" --forbid-host-net-driver "$driver"
   done
@@ -655,6 +689,8 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS "$tc_direct_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS "$full_kmod_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS "$tix_tcp_full_kmod_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_MIN_GBPS "$tix_tcp_inner_gso_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_MIN_GBPS "$tix_tcp_inner_gso_latched_fallback_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS "$secure_kudp_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS "$secure_tix_tcp_kernel_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
@@ -663,6 +699,8 @@ main() {
   tc_direct_min_gbps="$(max_decimal "$tc_direct_min_gbps" "3")"
   full_kmod_min_gbps="$(max_decimal "$full_kmod_min_gbps" "3")"
   tix_tcp_full_kmod_min_gbps="$(max_decimal "$tix_tcp_full_kmod_min_gbps" "4")"
+  tix_tcp_inner_gso_min_gbps="$(max_decimal "$tix_tcp_inner_gso_min_gbps" "4")"
+  tix_tcp_inner_gso_latched_fallback_min_gbps="$(max_decimal "$tix_tcp_inner_gso_latched_fallback_min_gbps" "4")"
   secure_kudp_min_gbps="$(max_decimal "$secure_kudp_min_gbps" "1.5")"
   secure_tix_tcp_kernel_min_gbps="$(max_decimal "$secure_tix_tcp_kernel_min_gbps" "1.5")"
   route_gso_min_gbps="$(max_decimal "$route_gso_min_gbps" "2.5")"
@@ -674,6 +712,12 @@ main() {
   min_iperf_intervals="$(max_integer "$min_iperf_intervals" "600")"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO "$min_interval_gbps_ratio"
   min_interval_gbps_ratio="$(max_decimal "$min_interval_gbps_ratio" "0.25")"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MAX_CONSECUTIVE_ZERO_INTERVALS "$max_consecutive_zero_intervals"
+  case "${required_iperf_mode}:${required_iperf_directions}" in
+    forward:both|bidir:a2b|bidir:b2a) ;;
+    *) die "TRUSTIX_CROSS_HOST_GATE_IPERF_MODE/TRUSTIX_CROSS_HOST_GATE_IPERF_DIRECTIONS must be forward/both, bidir/a2b, or bidir/b2a" ;;
+  esac
+  max_consecutive_zero_intervals="$(min_integer "$max_consecutive_zero_intervals" "0")"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS "$min_host_cpus"
   min_host_cpus="$(max_integer "$min_host_cpus" "4")"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
@@ -713,6 +757,8 @@ main() {
   validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS "$tix_tcp_full_kmod_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS "$tix_tcp_inner_gso_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_GBPS "$tix_tcp_inner_gso_latched_fallback_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS "$secure_tix_tcp_kernel_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw"
@@ -721,6 +767,8 @@ main() {
   validate_case_seconds_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS "$tc_direct_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS "$full_kmod_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS "$tix_tcp_full_kmod_case_min_seconds_raw"
+  validate_case_seconds_map TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS "$tix_tcp_inner_gso_case_min_seconds_raw"
+  validate_case_seconds_map TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_SECONDS "$tix_tcp_inner_gso_latched_fallback_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS "$secure_kudp_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS "$secure_tix_tcp_kernel_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS "$route_gso_case_min_seconds_raw"
@@ -730,6 +778,8 @@ main() {
   local tc_direct_cases=""
   local full_kmod_cases=""
   local tix_tcp_full_kmod_cases=""
+  local tix_tcp_inner_gso_cases=""
+  local tix_tcp_inner_gso_latched_fallback_cases=""
   local secure_kudp_cases=""
   local secure_tix_tcp_kernel_cases=""
   local route_gso_cases=""
@@ -738,6 +788,8 @@ main() {
   local tc_direct_case_count=0
   local full_kmod_case_count=0
   local tix_tcp_full_kmod_case_count=0
+  local tix_tcp_inner_gso_case_count=0
+  local tix_tcp_inner_gso_latched_fallback_case_count=0
   local secure_kudp_case_count=0
   local secure_tix_tcp_kernel_case_count=0
   local route_gso_case_count=0
@@ -783,6 +835,16 @@ main() {
     append_case_token tix_tcp_full_kmod_cases "$token"
     tix_tcp_full_kmod_case_count=$((tix_tcp_full_kmod_case_count + 1))
   done
+  for token in $tix_tcp_inner_gso_cases_raw; do
+    validate_case_token "$token"
+    append_case_token tix_tcp_inner_gso_cases "$token"
+    tix_tcp_inner_gso_case_count=$((tix_tcp_inner_gso_case_count + 1))
+  done
+  for token in $tix_tcp_inner_gso_latched_fallback_cases_raw; do
+    validate_case_token "$token"
+    append_case_token tix_tcp_inner_gso_latched_fallback_cases "$token"
+    tix_tcp_inner_gso_latched_fallback_case_count=$((tix_tcp_inner_gso_latched_fallback_case_count + 1))
+  done
   if [[ -n "$dd_secure_kudp" ]]; then
     append_case_token secure_kudp_cases "dd-secure-kudp=${dd_secure_kudp}"
     secure_kudp_case_count=$((secure_kudp_case_count + 1))
@@ -819,6 +881,8 @@ main() {
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw" "$tc_direct_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw" "$full_kmod_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS "$tix_tcp_full_kmod_case_min_gbps_raw" "$tix_tcp_full_kmod_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_GBPS "$tix_tcp_inner_gso_case_min_gbps_raw" "$tix_tcp_inner_gso_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_GBPS "$tix_tcp_inner_gso_latched_fallback_case_min_gbps_raw" "$tix_tcp_inner_gso_latched_fallback_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw" "$secure_kudp_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS "$secure_tix_tcp_kernel_case_min_gbps_raw" "$secure_tix_tcp_kernel_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw" "$route_gso_cases"
@@ -827,12 +891,14 @@ main() {
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS "$tc_direct_case_min_seconds_raw" "$tc_direct_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS "$full_kmod_case_min_seconds_raw" "$full_kmod_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS "$tix_tcp_full_kmod_case_min_seconds_raw" "$tix_tcp_full_kmod_cases"
+  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASE_MIN_SECONDS "$tix_tcp_inner_gso_case_min_seconds_raw" "$tix_tcp_inner_gso_cases"
+  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASE_MIN_SECONDS "$tix_tcp_inner_gso_latched_fallback_case_min_seconds_raw" "$tix_tcp_inner_gso_latched_fallback_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS "$secure_kudp_case_min_seconds_raw" "$secure_kudp_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS "$secure_tix_tcp_kernel_case_min_seconds_raw" "$secure_tix_tcp_kernel_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS "$route_gso_case_min_seconds_raw" "$route_gso_cases"
 
-  if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$tix_tcp_full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$secure_tix_tcp_kernel_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
-    die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
+  if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$tix_tcp_full_kmod_case_count" -eq 0 && "$tix_tcp_inner_gso_case_count" -eq 0 && "$tix_tcp_inner_gso_latched_fallback_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$secure_tix_tcp_kernel_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
+    die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES/TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_LATCHED_FALLBACK_CASES/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
   fi
 
   write_gate_manifest
@@ -1019,6 +1085,172 @@ main() {
       --require-module-param-max trustix_datapath.tx_plaintext_gso_errors=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_errors=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0 \
+      --require-lsmod-module trustix_datapath
+  fi
+
+  if [[ "$tix_tcp_inner_gso_case_count" -gt 0 ]]; then
+    run_gate_case_list tix-tcp-inner-gso "$tix_tcp_inner_gso_min_gbps" "$tix_tcp_inner_gso_cases" "$tix_tcp_inner_gso_case_min_gbps_raw" "$tix_tcp_inner_gso_case_min_seconds_raw" \
+      --require-transport-policy-stat encryption=plaintext \
+      --require-transport-policy-stat profile=performance \
+      --require-transport-policy-stat datapath=kernel_module \
+      --require-transport-policy-stat crypto_placement=userspace \
+      --require-transport-policy-min session_pool_size="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-transport-policy-stat session_pool_strategy=flow \
+      --require-transport-policy-stat session_pool_warmup=true \
+      --require-transport-sessions-min "${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-min data_path.active_sessions="${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors="${tix_tcp_full_kmod_session_error_budget}" \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-status-max data_path.counters.session_resets_sent=0 \
+      --require-status-max data_path.counters.session_resets_received=0 \
+      --require-status-max data_path.counters.stale_sessions_dropped=0 \
+      --require-datapath-stat capture_forwarder_suppressed=true \
+      --require-datapath-stat tix_tcp.provider=kernel_datapath_full_plaintext \
+      --require-datapath-stat tix_tcp.fast_path=true \
+      --require-datapath-min tix_tcp.active_flows="${tix_tcp_full_kmod_min_sessions}" \
+      --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
+      --require-datapath-min counters.session_dials="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-datapath-max counters.session_dial_errors=0 \
+      --require-datapath-stat tix_tcp.inner_tcp_checksum_partial=true \
+      --require-datapath-stat tix_tcp.inner_gso=true \
+      --require-datapath-stat tix_tcp.port_sharding=true \
+      --require-transport-session-stat stats.extra.tix_tcp_inner_gso_local=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_inner_gso_peer=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_inner_gso_negotiated=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_local=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_peer=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_negotiated=1 \
+      --require-module-param-min trustix_datapath.enable_features=7296 \
+      --require-module-param-min trustix_datapath.features=7296 \
+      --require-module-param-min trustix_datapath.safe_features=7296 \
+      --require-module-param-max trustix_datapath.unsafe_features=0 \
+      --require-module-param-max trustix_datapath.selftest_failures=0 \
+      --require-module-param-min trustix_datapath.rx_worker_inject=1 \
+      --require-module-param-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache=1 \
+      --require-module-param-min trustix_datapath.rx_worker_stream_offset_copy=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext=1 \
+      --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_payload_copy_csum=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_outer_gso_page_pool=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_outer_gso_page_pool_available=1 \
+      --require-module-param-min trustix_datapath.session_records="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-module-param-min trustix_datapath.session_wire_records="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-module-param-min trustix_datapath.tx_plaintext_packets=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_gso_segments=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_inner_tcp_checksum_partial=1 \
+      --require-module-param-min trustix_datapath.rx_worker_inner_tcp_checksum_partial=1 \
+      --require-module-param-max trustix_datapath.rx_worker_inner_tcp_checksum_partial_errors=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_inner_gso_attempts=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_inner_gso_packets=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_inner_gso_segments=1 \
+      --require-module-param-min trustix_datapath.rx_worker_inner_gso_candidates=1 \
+      --require-module-param-min trustix_datapath.rx_worker_inner_gso_packets=1 \
+      --require-module-param-min trustix_datapath.rx_worker_inner_gso_segments=1 \
+      --require-module-param-max trustix_datapath.inner_gso_auto_recover=0 \
+      --require-module-param-min trustix_datapath.inner_gso_runtime_ready=1 \
+      --require-module-param-max trustix_datapath.inner_gso_circuit_trips=0 \
+      --require-module-param-max trustix_datapath.inner_gso_timeout_circuit_trips=0 \
+      --require-module-param-max trustix_datapath.inner_gso_no_progress_circuit_trips=0 \
+      --require-module-param-max trustix_datapath.inner_gso_circuit_recoveries=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_tix_tcp_ordered_xmits=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_tix_tcp_sequence_assign_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_page_pool_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_payload_copy_csum_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_stream_offset_copy_errors=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_outer_tuple_hash_sets=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_inner_flow_hash_sets=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_tix_tcp_port_shard_sets=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_tix_tcp_shard_tx_queue_sets=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_hits=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_fallbacks=0 \
+      --require-module-param-min trustix_datapath.rx_tix_tcp_port_shard_matches=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_hash_tx_queue_fallbacks=0 \
+      --require-module-param-min trustix_datapath.rx_worker_injected=1 \
+      --require-module-param-min trustix_datapath.rx_worker_dst_mac_cache_hits=1 \
+      --require-module-param-min trustix_datapath.rx_worker_gso_xmit_segments=1 \
+      --require-module-param-max trustix_datapath.rx_worker_alloc_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_deliver_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_gso_xmit_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_ret_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_other_ret_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_dev_forward_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_peer_forward_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_build_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_sessions=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stale_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_xmit_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_gso_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0 \
+      --require-lsmod-module trustix_datapath
+  fi
+
+  if [[ "$tix_tcp_inner_gso_latched_fallback_case_count" -gt 0 ]]; then
+    run_gate_case_list tix-tcp-inner-gso-latched-fallback "$tix_tcp_inner_gso_latched_fallback_min_gbps" "$tix_tcp_inner_gso_latched_fallback_cases" "$tix_tcp_inner_gso_latched_fallback_case_min_gbps_raw" "$tix_tcp_inner_gso_latched_fallback_case_min_seconds_raw" \
+      --require-inner-gso-latched-fallback-contract \
+      --require-transport-policy-stat encryption=plaintext \
+      --require-transport-policy-stat profile=performance \
+      --require-transport-policy-stat datapath=kernel_module \
+      --require-transport-policy-stat crypto_placement=userspace \
+      --require-transport-policy-min session_pool_size="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-transport-policy-stat session_pool_strategy=flow \
+      --require-transport-policy-stat session_pool_warmup=true \
+      --require-transport-sessions-min "${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-min data_path.active_sessions="${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors="${tix_tcp_full_kmod_session_error_budget}" \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-datapath-stat capture_forwarder_suppressed=true \
+      --require-datapath-stat tix_tcp.provider=kernel_datapath_full_plaintext \
+      --require-datapath-stat tix_tcp.fast_path=true \
+      --require-datapath-min tix_tcp.active_flows="${tix_tcp_full_kmod_min_sessions}" \
+      --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
+      --require-datapath-min counters.session_dials="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-datapath-max counters.session_dial_errors=0 \
+      --require-datapath-stat tix_tcp.inner_tcp_checksum_partial=true \
+      --require-datapath-stat tix_tcp.port_sharding=true \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_local=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_peer=1 \
+      --require-transport-session-stat stats.extra.tix_tcp_port_sharding_negotiated=1 \
+      --require-module-param-min trustix_datapath.enable_features=7296 \
+      --require-module-param-min trustix_datapath.features=7296 \
+      --require-module-param-min trustix_datapath.safe_features=7296 \
+      --require-module-param-max trustix_datapath.unsafe_features=0 \
+      --require-module-param-max trustix_datapath.selftest_failures=0 \
+      --require-module-param-min trustix_datapath.rx_worker_inject=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_attempts=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_packets=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_segments=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_inner_gso_fallbacks=0 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_packets=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_inner_gso_candidates=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_inner_gso_packets=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_inner_gso_segments=1 \
+      --require-module-param-any-min trustix_datapath.inner_gso_runtime_faults=1 \
+      --require-module-param-any-min trustix_datapath.inner_gso_circuit_trips=1 \
+      --require-module-param-max trustix_datapath.inner_gso_auto_recover=0 \
+      --require-module-param-max trustix_datapath.inner_gso_runtime_ready=0 \
+      --require-module-param-max trustix_datapath.inner_gso_circuit_recoveries=0 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_ordered_xmits=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_tix_tcp_sequence_assign_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_build_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_sessions=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stale_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_xmit_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_gso_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0 \
+      --require-module-param-max trustix_datapath.rx_worker_alloc_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_deliver_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_gso_xmit_errors=0 \
       --require-lsmod-module trustix_datapath
   fi
 

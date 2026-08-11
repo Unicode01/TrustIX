@@ -81,10 +81,12 @@ health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
 iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600}"
 iperf_parallel_explicit="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}"
 iperf_parallel="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}"
+transport_mtu="${TRUSTIX_CROSS_HOST_MTU:-1500}"
 iptunnel_iperf_parallel="${TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL:-4}"
-iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-$((iperf_seconds + 60))}"
+iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-}"
 iperf_mode="${TRUSTIX_CROSS_HOST_IPERF_MODE:-forward}"
 iperf_directions="${TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both}"
+max_consecutive_zero_intervals="${TRUSTIX_CROSS_HOST_MAX_CONSECUTIVE_ZERO_INTERVALS:-0}"
 mixed_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS:-0}"
 mixed_udp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS:-$mixed_min_gbps}"
 mixed_tix_tcp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_MIN_GBPS:-$mixed_min_gbps}"
@@ -102,6 +104,22 @@ capture_forwarder_batch="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH:-1024}"
 capture_forwarder_batch_delay="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH_DELAY:-0}"
 cpu_profile_dir="${TRUSTIX_CROSS_HOST_CPU_PROFILE_DIR:-}"
 secure_tix_tcp_inner_checksum_partial="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_INNER_CHECKSUM_PARTIAL:-}"
+tix_tcp_inner_gso="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO:-}"
+netem_targets="${TRUSTIX_CROSS_HOST_NETEM_TARGETS:-both}"
+netem_placement="${TRUSTIX_CROSS_HOST_NETEM_PLACEMENT:-egress}"
+netem_loss_pct="${TRUSTIX_CROSS_HOST_NETEM_LOSS_PCT:-0}"
+netem_delay_ms="${TRUSTIX_CROSS_HOST_NETEM_DELAY_MS:-0}"
+netem_jitter_ms="${TRUSTIX_CROSS_HOST_NETEM_JITTER_MS:-0}"
+netem_reorder_pct="${TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT:-0}"
+netem_duplicate_pct="${TRUSTIX_CROSS_HOST_NETEM_DUPLICATE_PCT:-0}"
+netem_corrupt_pct="${TRUSTIX_CROSS_HOST_NETEM_CORRUPT_PCT:-0}"
+netem_limit_packets="${TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS:-262144}"
+netem_disable_gro="${TRUSTIX_CROSS_HOST_NETEM_DISABLE_GRO:-1}"
+netem_active_seconds="${TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS:-0}"
+inner_gso_latched_fallback_observe_seconds="${TRUSTIX_CROSS_HOST_INNER_GSO_LATCHED_FALLBACK_OBSERVE_SECONDS:-0}"
+require_inner_gso_latched_fallback="${TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK:-0}"
+netem_handle="7e10:"
+netem_transition_pid=""
 iptunnel_port="${TRUSTIX_CROSS_HOST_IPTUNNEL_PORT:-47829}"
 iptunnel_mtu="${TRUSTIX_CROSS_HOST_IPTUNNEL_MTU:-1400}"
 iptunnel_a_carrier="${TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER:-10.255.10.1/30}"
@@ -164,6 +182,154 @@ nonnegative_decimal() {
 
 decimal_is_zero() {
   [[ "${1:-}" =~ ^0+([.]0*)?$ ]]
+}
+
+netem_enabled() {
+  ! decimal_is_zero "$netem_loss_pct" ||
+    [[ "$netem_delay_ms" != "0" ]] ||
+    [[ "$netem_jitter_ms" != "0" ]] ||
+    ! decimal_is_zero "$netem_reorder_pct" ||
+    ! decimal_is_zero "$netem_duplicate_pct" ||
+    ! decimal_is_zero "$netem_corrupt_pct"
+}
+
+netem_targets_node() {
+  case "${netem_targets}:$1" in
+    both:a|both:b|a:a|b:b) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_netem_percentage() {
+  local name="$1"
+  local value="$2"
+  nonnegative_decimal "$value" || die "${name} must be a decimal percentage in 0..100"
+  awk -v value="$value" 'BEGIN { exit !(value >= 0 && value <= 100) }' ||
+    die "${name} must be a decimal percentage in 0..100"
+}
+
+scheduled_iperf_traffic_seconds() {
+  case "$iperf_directions" in
+    both) printf '%s\n' "$((iperf_seconds * 2))" ;;
+    *) printf '%s\n' "$iperf_seconds" ;;
+  esac
+}
+
+validate_netem_config() {
+  local scheduled_traffic_seconds
+  case "$iperf_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_SECONDS must be an integer" ;; esac
+  if [[ -z "$iperf_timeout" ]]; then
+    iperf_timeout=$((iperf_seconds + 60))
+  fi
+  case "$iperf_timeout" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_TIMEOUT must be an integer" ;; esac
+  [[ "$iperf_timeout" -gt 0 ]] || die "TRUSTIX_CROSS_HOST_IPERF_TIMEOUT must be positive"
+  case "$netem_targets" in
+    both|a|b) ;;
+    *) die "TRUSTIX_CROSS_HOST_NETEM_TARGETS must be both, a, or b" ;;
+  esac
+  case "$netem_placement" in
+    egress|ingress) ;;
+    *) die "TRUSTIX_CROSS_HOST_NETEM_PLACEMENT must be egress or ingress" ;;
+  esac
+  validate_netem_percentage TRUSTIX_CROSS_HOST_NETEM_LOSS_PCT "$netem_loss_pct"
+  validate_netem_percentage TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT "$netem_reorder_pct"
+  validate_netem_percentage TRUSTIX_CROSS_HOST_NETEM_DUPLICATE_PCT "$netem_duplicate_pct"
+  validate_netem_percentage TRUSTIX_CROSS_HOST_NETEM_CORRUPT_PCT "$netem_corrupt_pct"
+  [[ "$netem_delay_ms" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_DELAY_MS must be a non-negative integer"
+  [[ "$netem_jitter_ms" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_JITTER_MS must be a non-negative integer"
+  [[ "$netem_limit_packets" =~ ^[1-9][0-9]*$ ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS must be a positive integer"
+  [[ "$netem_limit_packets" -ge 1 && "$netem_limit_packets" -le 1048576 ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS must be in 1..1048576"
+  case "$netem_disable_gro" in
+    0|1) ;;
+    *) die "TRUSTIX_CROSS_HOST_NETEM_DISABLE_GRO must be 0 or 1" ;;
+  esac
+  case "$netem_active_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS must be a non-negative integer" ;; esac
+  case "$inner_gso_latched_fallback_observe_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_INNER_GSO_LATCHED_FALLBACK_OBSERVE_SECONDS must be a non-negative integer" ;; esac
+  case "$require_inner_gso_latched_fallback" in
+    0|1) ;;
+    *) die "TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK must be 0 or 1" ;;
+  esac
+  if [[ "$netem_jitter_ms" != "0" && "$netem_delay_ms" == "0" ]]; then
+    die "TRUSTIX_CROSS_HOST_NETEM_JITTER_MS requires TRUSTIX_CROSS_HOST_NETEM_DELAY_MS > 0"
+  fi
+  if ! decimal_is_zero "$netem_reorder_pct" && [[ "$netem_delay_ms" == "0" ]]; then
+    die "TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT requires TRUSTIX_CROSS_HOST_NETEM_DELAY_MS > 0"
+  fi
+  if [[ "$netem_active_seconds" -gt 0 ]] && ! netem_enabled; then
+    die "TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS requires an enabled netem impairment"
+  fi
+  scheduled_traffic_seconds="$(scheduled_iperf_traffic_seconds)"
+  if [[ "$netem_active_seconds" -ge "$scheduled_traffic_seconds" && "$netem_active_seconds" -gt 0 ]]; then
+    die "TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS must be less than scheduled iperf traffic seconds (${scheduled_traffic_seconds})"
+  fi
+  if [[ "$require_inner_gso_latched_fallback" == "1" ]]; then
+    [[ "$netem_active_seconds" -gt 0 ]] ||
+      die "TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK requires TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS > 0"
+    [[ "$inner_gso_latched_fallback_observe_seconds" -gt 0 ]] ||
+      die "TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK requires TRUSTIX_CROSS_HOST_INNER_GSO_LATCHED_FALLBACK_OBSERVE_SECONDS > 0"
+    if [[ -n "$tix_tcp_inner_gso" ]] && ! truthy "$tix_tcp_inner_gso"; then
+      die "TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK cannot run when TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO is explicitly disabled"
+    fi
+    [[ $((netem_active_seconds + inner_gso_latched_fallback_observe_seconds)) -lt "$scheduled_traffic_seconds" ]] ||
+      die "inner-GSO latched-fallback observation must finish before scheduled iperf traffic seconds (${scheduled_traffic_seconds})"
+  elif [[ "$inner_gso_latched_fallback_observe_seconds" -gt 0 ]]; then
+    die "TRUSTIX_CROSS_HOST_INNER_GSO_LATCHED_FALLBACK_OBSERVE_SECONDS requires TRUSTIX_CROSS_HOST_REQUIRE_INNER_GSO_LATCHED_FALLBACK=1"
+  fi
+}
+
+validate_transport_tuning_config() {
+  case "$transport_mtu" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_MTU must be an integer" ;; esac
+  [[ "$transport_mtu" -ge 576 && "$transport_mtu" -le 65535 ]] ||
+    die "TRUSTIX_CROSS_HOST_MTU must be in 576..65535"
+  case "$tix_tcp_inner_gso" in
+    ""|true|false|1|0|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO must be boolean" ;;
+  esac
+}
+
+netem_qdisc_args() {
+  local args="limit ${netem_limit_packets}"
+  if [[ "$netem_delay_ms" != "0" ]]; then
+    args+=" delay ${netem_delay_ms}ms"
+    if [[ "$netem_jitter_ms" != "0" ]]; then
+      args+=" ${netem_jitter_ms}ms"
+    fi
+  fi
+  decimal_is_zero "$netem_loss_pct" || args+=" loss ${netem_loss_pct}%"
+  decimal_is_zero "$netem_duplicate_pct" || args+=" duplicate ${netem_duplicate_pct}%"
+  decimal_is_zero "$netem_corrupt_pct" || args+=" corrupt ${netem_corrupt_pct}%"
+  decimal_is_zero "$netem_reorder_pct" || args+=" reorder ${netem_reorder_pct}%"
+  printf '%s\n' "$args"
+}
+
+write_netem_contract() {
+  local enabled=0
+  netem_enabled && enabled=1
+  cat >"$workdir/netem-config.txt" <<EOF
+format=trustix-cross-host-netem-v1
+enabled=${enabled}
+targets=${netem_targets}
+placement=${netem_placement}
+loss_pct=${netem_loss_pct}
+delay_ms=${netem_delay_ms}
+jitter_ms=${netem_jitter_ms}
+reorder_pct=${netem_reorder_pct}
+duplicate_pct=${netem_duplicate_pct}
+corrupt_pct=${netem_corrupt_pct}
+limit_packets=${netem_limit_packets}
+disable_gro=${netem_disable_gro}
+active_seconds=${netem_active_seconds}
+require_inner_gso_latched_fallback=${require_inner_gso_latched_fallback}
+inner_gso_latched_fallback_observe_seconds=${inner_gso_latched_fallback_observe_seconds}
+handle=${netem_handle}
+underlay_a_if=${underlay_a_if}
+underlay_b_if=${underlay_b_if}
+qdisc_args=$(netem_qdisc_args)
+EOF
 }
 
 die() {
@@ -276,7 +442,7 @@ write_run_timing_end() {
   elapsed=$((end_epoch - soak_start_epoch))
   tmp="${workdir}/run-timing.json.tmp"
   cat >"$tmp" <<EOF
-{"case":"$(json_escape "$case_name")","transport":"$(json_escape "$(case_transport)")","encryption":"$(json_escape "$(case_encryption)")","profile":"$(json_escape "$(case_transport_profile)")","datapath":"$(json_escape "$(case_transport_datapath)")","crypto_placement":"$(json_escape "$(case_crypto_placement)")","iperf_mode":"$(json_escape "$iperf_mode")","iperf_directions":"$(json_escape "$iperf_directions")","iperf_parallel":${iperf_parallel},"iperf_client_port":${iperf_client_port},"iperf_seconds_requested":${iperf_seconds},"start_epoch":${soak_start_epoch},"end_epoch":${end_epoch},"elapsed_seconds":${elapsed},"start_time":"${soak_start_iso}","end_time":"${end_iso}"}
+{"case":"$(json_escape "$case_name")","transport":"$(json_escape "$(case_transport)")","encryption":"$(json_escape "$(case_encryption)")","profile":"$(json_escape "$(case_transport_profile)")","datapath":"$(json_escape "$(case_transport_datapath)")","crypto_placement":"$(json_escape "$(case_crypto_placement)")","mtu":${transport_mtu},"iperf_mode":"$(json_escape "$iperf_mode")","iperf_directions":"$(json_escape "$iperf_directions")","iperf_parallel":${iperf_parallel},"iperf_client_port":${iperf_client_port},"iperf_seconds_requested":${iperf_seconds},"start_epoch":${soak_start_epoch},"end_epoch":${end_epoch},"elapsed_seconds":${elapsed},"start_time":"${soak_start_iso}","end_time":"${end_iso}"}
 EOF
   mv "$tmp" "${workdir}/run-timing.json"
 }
@@ -1236,6 +1402,7 @@ check_local_inputs() {
   case "$iptunnel_iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be an integer" ;; esac
   case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
   case "$iperf_client_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be an integer" ;; esac
+  case "$max_consecutive_zero_intervals" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_MAX_CONSECUTIVE_ZERO_INTERVALS must be a non-negative integer" ;; esac
   if [[ -z "$mixed_iperf_port" ]]; then
     mixed_iperf_port=$((iperf_port + 2))
   fi
@@ -1298,6 +1465,7 @@ check_local_inputs() {
   validate_multi_endpoint_data_ports
   case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
   case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
+  need_cmd python3
   nonnegative_decimal "$mixed_udp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
   nonnegative_decimal "$mixed_tix_tcp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
   if case_uses_pinned_mixed_routes && [[ "$iperf_mode" != "forward" ]]; then
@@ -1305,6 +1473,9 @@ check_local_inputs() {
   fi
   if case_uses_pinned_mixed_routes &&
     { ! decimal_is_zero "$mixed_udp_min_gbps" || ! decimal_is_zero "$mixed_tix_tcp_min_gbps"; }; then
+    need_cmd python3
+  fi
+  if [[ "$require_inner_gso_latched_fallback" == "1" ]]; then
     need_cmd python3
   fi
   if [[ -n "$endpoint_transport_override" ]]; then
@@ -1326,12 +1497,19 @@ check_local_inputs() {
 
 check_node_prereqs() {
   local node="$1"
-  local trustixd trustixctl
+  local trustixd trustixctl netem_required=0
   trustixd="$(node_bin "$node" trustixd)"
   trustixctl="$(node_bin "$node" trustixctl)"
+  netem_enabled && netem_required=1
   run_node "$node" "set -Eeuo pipefail
 missing=0
 required_commands='ip iperf3 curl'
+if [ ${netem_required} = 1 ]; then
+  required_commands=\"\${required_commands} tc\"
+fi
+if [ ${netem_required} = 1 ] && [ $(remote_quote "$netem_placement") = ingress ]; then
+  required_commands=\"\${required_commands} ethtool modprobe rmmod\"
+fi
 if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
   required_commands=\"\${required_commands} systemctl systemd-run\"
 fi
@@ -1418,6 +1596,676 @@ resolve_underlay() {
   fi
   [[ -n "$underlay_a_if" ]] || die "could not detect node A underlay interface"
   [[ -n "$underlay_b_if" ]] || die "could not detect node B underlay interface"
+}
+
+apply_netem_egress_node() {
+  local node="$1"
+  local dir underlay_if qdisc_args
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  qdisc_args="$(netem_qdisc_args)"
+  run_node "$node" "set -Eeuo pipefail
+tc_cmd=\$(command -v tc)
+dir=$(remote_quote "$dir")
+underlay_if=$(remote_quote "$underlay_if")
+mkdir -p \"\$dir\"
+\"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\${dir}/netem-qdisc-before.txt\"
+\"\$tc_cmd\" qdisc replace dev \"\$underlay_if\" root handle ${netem_handle} netem ${qdisc_args}
+printf 'handle=%s interface=%s\n' $(remote_quote "$netem_handle") \"\$underlay_if\" >\"\${dir}/netem-owned.txt\"
+\"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\${dir}/netem-qdisc-applied.txt\"
+grep -Eq '^qdisc netem ${netem_handle}' \"\${dir}/netem-qdisc-applied.txt\"
+"
+}
+
+apply_netem() {
+  netem_enabled || return 0
+  log "applying netem placement=${netem_placement} targets=${netem_targets} args=$(netem_qdisc_args)"
+  apply_netem_node a
+  apply_netem_node b
+}
+
+collect_netem_egress_state_node() {
+  local node="$1"
+  local label="${2:-}"
+  local dir underlay_if suffix
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  suffix="$(netem_snapshot_suffix "$label")" || return
+  run_node "$node" "set +e
+tc_cmd=\$(command -v tc 2>/dev/null || true)
+[ -n \"\$tc_cmd\" ] || exit 0
+mkdir -p $(remote_quote "$dir")
+\"\$tc_cmd\" -s qdisc show dev $(remote_quote "$underlay_if") >$(remote_quote "${dir}/netem-qdisc${suffix}.txt") 2>&1
+exit 0
+"
+}
+
+clear_netem_egress_node() {
+  local node="$1"
+  local dir underlay_if
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  [[ -n "$underlay_if" ]] || return 0
+  run_node "$node" "set +e
+tc_cmd=\$(command -v tc 2>/dev/null || true)
+[ -n \"\$tc_cmd\" ] || exit 1
+dir=$(remote_quote "$dir")
+underlay_if=$(remote_quote "$underlay_if")
+mkdir -p \"\$dir\"
+current=\"\${dir}/.netem-qdisc-before-clear.tmp\"
+\"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\$current\" 2>&1
+owned=0
+[ -f \"\${dir}/netem-owned.txt\" ] && owned=1
+grep -Eq '^qdisc netem ${netem_handle}' \"\$current\" && owned=1
+rc=0
+if [ \"\$owned\" -eq 1 ]; then
+  mv \"\$current\" \"\${dir}/netem-qdisc-before-clear.txt\"
+  if grep -Eq '^qdisc netem ${netem_handle}' \"\${dir}/netem-qdisc-before-clear.txt\"; then
+    \"\$tc_cmd\" qdisc del dev \"\$underlay_if\" root || rc=1
+  fi
+else
+  rm -f \"\$current\"
+fi
+rm -f \"\${dir}/netem-owned.txt\"
+\"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\${dir}/netem-qdisc-after-clear.txt\" 2>&1 || rc=1
+exit \"\$rc\"
+"
+}
+
+netem_ifb_name() {
+  printf 'tix-ifb-%s\n' "$1"
+}
+
+netem_snapshot_suffix() {
+  local label="${1:-}"
+  if [[ -z "$label" ]]; then
+    printf '%s\n' '-current'
+    return 0
+  fi
+  [[ "$label" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf -- '-%s\n' "$label"
+}
+
+apply_netem_ingress_node() {
+  local node="$1"
+  local dir underlay_if qdisc_args ifb_if corrupt_enabled
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  qdisc_args="$(netem_qdisc_args)"
+  ifb_if="$(netem_ifb_name "$node")"
+  corrupt_enabled=0
+  decimal_is_zero "$netem_corrupt_pct" || corrupt_enabled=1
+  run_node "$node" "set -Eeuo pipefail
+tc_cmd=\$(command -v tc)
+ip_cmd=\$(command -v ip)
+ethtool_cmd=\$(command -v ethtool)
+dir=$(remote_quote "$dir")
+underlay_if=$(remote_quote "$underlay_if")
+ifb_if=$(remote_quote "$ifb_if")
+mkdir -p \"\$dir\"
+\"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\${dir}/netem-qdisc-before.txt\"
+\"\$ethtool_cmd\" -k \"\$underlay_if\" >\"\${dir}/netem-offload-before.txt\"
+gro=\$(awk '\$1 == \"generic-receive-offload:\" { print \$2; exit }' \"\${dir}/netem-offload-before.txt\")
+rx_gro_hw=\$(awk '\$1 == \"rx-gro-hw:\" { print \$2; exit }' \"\${dir}/netem-offload-before.txt\")
+lro=\$(awk '\$1 == \"large-receive-offload:\" { print \$2; exit }' \"\${dir}/netem-offload-before.txt\")
+rx_checksum=\$(awk '\$1 == \"rx-checksumming:\" { print \$2; exit }' \"\${dir}/netem-offload-before.txt\")
+rx_checksum_fixed=\$(awk '\$1 == \"rx-checksumming:\" { for (i = 3; i <= NF; i++) if (\$i == \"[fixed]\") { print 1; exit }; print 0; exit }' \"\${dir}/netem-offload-before.txt\")
+ifb_loaded=0
+grep -q '^ifb ' /proc/modules 2>/dev/null && ifb_loaded=1
+case \"\$gro\" in on|off) ;; *) echo 'cannot read generic-receive-offload state' >&2; exit 1 ;; esac
+case \"\$rx_gro_hw\" in ''|on|off) ;; *) echo 'cannot read rx-gro-hw state' >&2; exit 1 ;; esac
+case \"\$lro\" in ''|on|off) ;; *) echo 'cannot read large-receive-offload state' >&2; exit 1 ;; esac
+case \"\$rx_checksum\" in on|off) ;; *) echo 'cannot read rx-checksumming state' >&2; exit 1 ;; esac
+case \"\$rx_checksum_fixed\" in 0|1) ;; *) echo 'cannot read rx-checksumming mutability' >&2; exit 1 ;; esac
+if \"\$ip_cmd\" link show dev \"\$ifb_if\" >/dev/null 2>&1; then
+  echo \"refusing to replace existing IFB \$ifb_if\" >&2
+  exit 1
+fi
+if \"\$tc_cmd\" qdisc show dev \"\$underlay_if\" | grep -Eq '^qdisc (ingress|clsact) ffff:'; then
+  echo \"refusing to replace existing ingress qdisc on \$underlay_if\" >&2
+  exit 1
+fi
+rx_checksum_changed=0
+if [ $(remote_quote "$corrupt_enabled") = 1 ] && [ \"\$rx_checksum\" = on ]; then
+  if [ \"\$rx_checksum_fixed\" = 1 ]; then
+    echo \"ingress netem corruption cannot disable fixed RX checksum offload on \$underlay_if; use packet loss to model detected wire corruption\" >&2
+    exit 1
+  fi
+  rx_checksum_changed=1
+fi
+printf 'placement=ingress\nhandle=%s\ninterface=%s\nifb=%s\ndisable_gro=%s\ngro=%s\nrx_gro_hw=%s\nlro=%s\ncorrupt_enabled=%s\nrx_checksum=%s\nrx_checksum_fixed=%s\nrx_checksum_changed=%s\nifb_loaded=%s\n' $(remote_quote "$netem_handle") \"\$underlay_if\" \"\$ifb_if\" $(remote_quote "$netem_disable_gro") \"\$gro\" \"\$rx_gro_hw\" \"\$lro\" $(remote_quote "$corrupt_enabled") \"\$rx_checksum\" \"\$rx_checksum_fixed\" \"\$rx_checksum_changed\" \"\$ifb_loaded\" >\"\${dir}/netem-owned.txt\"
+if [ \"\$rx_checksum_changed\" = 1 ]; then
+  if ! \"\$ethtool_cmd\" -K \"\$underlay_if\" rx off; then
+    echo \"ingress netem corruption failed to disable RX checksum offload on \$underlay_if\" >&2
+    exit 1
+  fi
+  \"\$ethtool_cmd\" -k \"\$underlay_if\" >\"\${dir}/netem-offload-rx-disabled.txt\"
+  rx_checksum_after=\$(awk '\$1 == \"rx-checksumming:\" { print \$2; exit }' \"\${dir}/netem-offload-rx-disabled.txt\")
+  if [ \"\$rx_checksum_after\" != off ]; then
+    echo \"ingress netem corruption could not verify disabled RX checksum offload on \$underlay_if\" >&2
+    exit 1
+  fi
+fi
+modprobe ifb numifbs=0
+\"\$ip_cmd\" link add name \"\$ifb_if\" type ifb
+\"\$ip_cmd\" link set dev \"\$ifb_if\" up
+if [ $(remote_quote "$netem_disable_gro") = 1 ]; then
+  if [ \"\$gro\" = on ]; then \"\$ethtool_cmd\" -K \"\$underlay_if\" gro off; fi
+  if [ \"\$rx_gro_hw\" = on ]; then \"\$ethtool_cmd\" -K \"\$underlay_if\" rx-gro-hw off; fi
+  if [ \"\$lro\" = on ]; then \"\$ethtool_cmd\" -K \"\$underlay_if\" lro off; fi
+fi
+\"\$tc_cmd\" qdisc add dev \"\$underlay_if\" handle ffff: ingress
+\"\$tc_cmd\" filter add dev \"\$underlay_if\" parent ffff: protocol all pref 49152 u32 match u32 0 0 action mirred egress redirect dev \"\$ifb_if\"
+\"\$tc_cmd\" qdisc replace dev \"\$ifb_if\" root handle ${netem_handle} netem ${qdisc_args}
+\"\$tc_cmd\" -s qdisc show dev \"\$ifb_if\" >\"\${dir}/netem-qdisc-applied.txt\"
+\"\$tc_cmd\" -s filter show dev \"\$underlay_if\" parent ffff: >\"\${dir}/netem-ingress-filter-applied.txt\"
+\"\$ethtool_cmd\" -k \"\$underlay_if\" >\"\${dir}/netem-offload-applied.txt\"
+grep -Eq '^qdisc netem ${netem_handle}' \"\${dir}/netem-qdisc-applied.txt\"
+"
+}
+
+apply_netem_node() {
+  case "$netem_placement" in
+    egress) apply_netem_egress_node "$1" ;;
+    ingress) apply_netem_ingress_node "$1" ;;
+  esac
+}
+
+collect_netem_ingress_state_node() {
+  local node="$1"
+  local label="${2:-}"
+  local dir underlay_if ifb_if suffix
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  ifb_if="$(netem_ifb_name "$node")"
+  suffix="$(netem_snapshot_suffix "$label")" || return
+  run_node "$node" "set +e
+tc_cmd=\$(command -v tc 2>/dev/null || true)
+ethtool_cmd=\$(command -v ethtool 2>/dev/null || true)
+[ -n \"\$tc_cmd\" ] || exit 0
+mkdir -p $(remote_quote "$dir")
+\"\$tc_cmd\" -s qdisc show dev $(remote_quote "$ifb_if") >$(remote_quote "${dir}/netem-qdisc${suffix}.txt") 2>&1
+\"\$tc_cmd\" -s filter show dev $(remote_quote "$underlay_if") parent ffff: >$(remote_quote "${dir}/netem-ingress-filter${suffix}.txt") 2>&1
+if [ -n \"\$ethtool_cmd\" ]; then
+  \"\$ethtool_cmd\" -k $(remote_quote "$underlay_if") >$(remote_quote "${dir}/netem-offload${suffix}.txt") 2>&1
+fi
+exit 0
+"
+}
+
+collect_netem_state_node() {
+  case "$netem_placement" in
+    egress) collect_netem_egress_state_node "$1" "${2:-}" ;;
+    ingress) collect_netem_ingress_state_node "$1" "${2:-}" ;;
+  esac
+}
+
+clear_netem_ingress_node() {
+  local node="$1"
+  local dir underlay_if ifb_if
+  netem_enabled || return 0
+  netem_targets_node "$node" || return 0
+  dir="$(remote_dir "$node")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  ifb_if="$(netem_ifb_name "$node")"
+  [[ -n "$underlay_if" ]] || return 0
+  run_node "$node" "set +e
+tc_cmd=\$(command -v tc 2>/dev/null || true)
+ip_cmd=\$(command -v ip 2>/dev/null || true)
+ethtool_cmd=\$(command -v ethtool 2>/dev/null || true)
+dir=$(remote_quote "$dir")
+underlay_if=$(remote_quote "$underlay_if")
+ifb_if=$(remote_quote "$ifb_if")
+mkdir -p \"\$dir\"
+marker=\"\${dir}/netem-owned.txt\"
+rc=0
+if [ -f \"\$marker\" ] && grep -Fq 'placement=ingress' \"\$marker\"; then
+  gro=\$(sed -n 's/^gro=//p' \"\$marker\" | head -n 1)
+  rx_gro_hw=\$(sed -n 's/^rx_gro_hw=//p' \"\$marker\" | head -n 1)
+  lro=\$(sed -n 's/^lro=//p' \"\$marker\" | head -n 1)
+  rx_checksum=\$(sed -n 's/^rx_checksum=//p' \"\$marker\" | head -n 1)
+  rx_checksum_changed=\$(sed -n 's/^rx_checksum_changed=//p' \"\$marker\" | head -n 1)
+  ifb_loaded=\$(sed -n 's/^ifb_loaded=//p' \"\$marker\" | head -n 1)
+  disable_gro=\$(sed -n 's/^disable_gro=//p' \"\$marker\" | head -n 1)
+  if [ -n \"\$tc_cmd\" ]; then
+    \"\$tc_cmd\" -s qdisc show dev \"\$ifb_if\" >\"\${dir}/netem-qdisc-before-clear.txt\" 2>&1 || rc=1
+    \"\$tc_cmd\" -s filter show dev \"\$underlay_if\" parent ffff: >\"\${dir}/netem-ingress-filter-before-clear.txt\" 2>&1 || rc=1
+  fi
+  if [ -n \"\$tc_cmd\" ]; then \"\$tc_cmd\" qdisc del dev \"\$underlay_if\" ingress >/dev/null 2>&1 || true; fi
+  if [ -n \"\$ip_cmd\" ]; then \"\$ip_cmd\" link del dev \"\$ifb_if\" >/dev/null 2>&1 || true; fi
+  case \"\$ifb_loaded\" in
+    0) rmmod ifb >/dev/null 2>&1 || rc=1 ;;
+    1) ;;
+    *) rc=1 ;;
+  esac
+  if [ \"\$rx_checksum_changed\" = 1 ] && [ -n \"\$ethtool_cmd\" ]; then
+    case \"\$rx_checksum\" in on) \"\$ethtool_cmd\" -K \"\$underlay_if\" rx on || rc=1 ;; *) rc=1 ;; esac
+  elif [ \"\$rx_checksum_changed\" = 1 ]; then
+    rc=1
+  elif [ \"\$rx_checksum_changed\" != 0 ]; then
+    rc=1
+  fi
+  if [ \"\$disable_gro\" = 1 ] && [ -n \"\$ethtool_cmd\" ]; then
+    case \"\$gro\" in on) \"\$ethtool_cmd\" -K \"\$underlay_if\" gro on || rc=1 ;; off) ;; *) rc=1 ;; esac
+    case \"\$rx_gro_hw\" in on) \"\$ethtool_cmd\" -K \"\$underlay_if\" rx-gro-hw on || rc=1 ;; off|'') ;; *) rc=1 ;; esac
+    case \"\$lro\" in on) \"\$ethtool_cmd\" -K \"\$underlay_if\" lro on || rc=1 ;; off|'') ;; *) rc=1 ;; esac
+  elif [ \"\$disable_gro\" = 1 ]; then
+    rc=1
+  elif [ \"\$disable_gro\" != 0 ]; then
+    rc=1
+  fi
+fi
+rm -f \"\$marker\"
+if [ -n \"\$tc_cmd\" ]; then
+  \"\$tc_cmd\" -s qdisc show dev \"\$underlay_if\" >\"\${dir}/netem-qdisc-after-clear.txt\" 2>&1 || rc=1
+fi
+if [ -n \"\$ethtool_cmd\" ]; then
+  \"\$ethtool_cmd\" -k \"\$underlay_if\" >\"\${dir}/netem-offload-after-clear.txt\" 2>&1 || rc=1
+fi
+exit \"\$rc\"
+"
+}
+
+clear_netem_node() {
+  case "$netem_placement" in
+    egress) clear_netem_egress_node "$1" ;;
+    ingress) clear_netem_ingress_node "$1" ;;
+  esac
+}
+
+netem_qdisc_counters() {
+  local node="$1"
+  local label="$2"
+  local dir suffix values packets drops extra
+  dir="$(remote_dir "$node")"
+  suffix="$(netem_snapshot_suffix "$label")" || return
+  values="$(run_node "$node" "set -Eeuo pipefail
+file=$(remote_quote "${dir}/netem-qdisc${suffix}.txt")
+grep -Eq '^qdisc netem ${netem_handle}' \"\$file\"
+awk '/^ Sent / { gsub(/,/, \"\", \$7); print \$4, \$7; found=1; exit } END { if (!found) exit 1 }' \"\$file\"
+")" || return
+  read -r packets drops extra <<<"$values"
+  [[ "$packets" =~ ^[0-9]+$ && "$drops" =~ ^[0-9]+$ && -z "$extra" ]] || return 1
+  printf '%s %s\n' "$packets" "$drops"
+}
+
+record_netem_evidence() {
+  local label="$1"
+  local output tmp node targeted counters packets drops extra status=pass
+  [[ "$label" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  output="${workdir}/netem-evidence-${label}.txt"
+  tmp="${output}.tmp"
+  {
+    printf 'format=trustix-cross-host-netem-evidence-v1\n'
+    printf 'label=%s\n' "$label"
+    printf 'loss_pct=%s\n' "$netem_loss_pct"
+  } >"$tmp"
+  for node in a b; do
+    targeted=0
+    netem_targets_node "$node" && targeted=1
+    printf '%s_targeted=%s\n' "$node" "$targeted" >>"$tmp"
+    if [[ "$targeted" != "1" ]]; then
+      printf '%s_packets=0\n%s_drops=0\n' "$node" "$node" >>"$tmp"
+      continue
+    fi
+    counters="$(netem_qdisc_counters "$node" "$label")" || counters=""
+    read -r packets drops extra <<<"$counters"
+    if [[ ! "$packets" =~ ^[0-9]+$ || ! "$drops" =~ ^[0-9]+$ || -n "$extra" ]]; then
+      packets=0
+      drops=0
+      status=fail
+    fi
+    printf '%s_packets=%s\n%s_drops=%s\n' "$node" "$packets" "$node" "$drops" >>"$tmp"
+    [[ "$packets" -gt 0 ]] || status=fail
+    if ! decimal_is_zero "$netem_loss_pct"; then
+      [[ "$drops" -gt 0 ]] || status=fail
+    fi
+  done
+  printf 'status=%s\n' "$status" >>"$tmp"
+  mv "$tmp" "$output"
+  [[ "$status" == "pass" ]]
+}
+
+transport_snapshot_counter() {
+  local node="$1"
+  local label="$2"
+  local name="$3"
+  local dir value
+  dir="$(remote_dir "$node")"
+  value="$(run_node "$node" "cat $(remote_quote "${dir}/transports-${label}.json")" | python3 -c '
+import json
+import sys
+
+name = sys.argv[1]
+value = (json.load(sys.stdin).get("counters") or {}).get(name)
+if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    raise SystemExit(1)
+print(value)
+' "$name")" || return
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+transport_snapshot_extra_sum() {
+  local node="$1"
+  local label="$2"
+  local name="$3"
+  local dir value
+  dir="$(remote_dir "$node")"
+  value="$(run_node "$node" "cat $(remote_quote "${dir}/transports-${label}.json")" | python3 -c '
+import json
+import sys
+
+name = sys.argv[1]
+total = 0
+
+def visit(value):
+    global total
+    if isinstance(value, dict):
+        extra = value.get("extra")
+        if isinstance(extra, dict):
+            counter = extra.get(name)
+            if isinstance(counter, int) and not isinstance(counter, bool) and counter >= 0:
+                total += counter
+        for child in value.values():
+            visit(child)
+    elif isinstance(value, list):
+        for child in value:
+            visit(child)
+
+visit(json.load(sys.stdin))
+print(total)
+' "$name")" || return
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+inner_gso_module_param() {
+  local node="$1"
+  local name="$2"
+  run_node "$node" "cat $(remote_quote "/sys/module/trustix_datapath/parameters/${name}")" |
+    tr -d '\r\n'
+}
+
+inner_gso_module_param_uint() {
+  local value
+  value="$(inner_gso_module_param "$1" "$2")" || return
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+inner_gso_module_param_sum() {
+  local name="$1"
+  local a_value b_value
+  a_value="$(inner_gso_module_param_uint a "$name")" || return
+  b_value="$(inner_gso_module_param_uint b "$name")" || return
+  printf '%s\n' "$((a_value + b_value))"
+}
+
+inner_gso_runtime_ready_state_on_both_nodes() {
+  local expected="$1"
+  local a_ready b_ready
+  a_ready="$(inner_gso_module_param a inner_gso_runtime_ready)" || return
+  b_ready="$(inner_gso_module_param b inner_gso_runtime_ready)" || return
+  [[ "$a_ready" == "$expected" && "$b_ready" == "$expected" ]]
+}
+
+inner_gso_auto_recover_disabled_on_both_nodes() {
+  local a_auto_recover b_auto_recover
+  a_auto_recover="$(inner_gso_module_param a inner_gso_auto_recover)" || return
+  b_auto_recover="$(inner_gso_module_param b inner_gso_auto_recover)" || return
+  [[ "$a_auto_recover" == "N" && "$b_auto_recover" == "N" ]]
+}
+
+collect_inner_gso_transition_snapshot() {
+  local label="$1"
+  collect_transport_snapshot "netem-${label}" || true
+  collect_module_parameters a "netem-${label}" || true
+  collect_module_parameters b "netem-${label}" || true
+  collect_netem_state_node a "$label" || true
+  collect_netem_state_node b "$label" || true
+}
+
+run_netem_transition() {
+  local contract="${workdir}/inner-gso-latched-fallback-contract.txt"
+  local before_inner=0 before_outer=0 before_plaintext=0 before_trips=0
+  local clear_inner=0 clear_outer=0 clear_plaintext=0 clear_recoveries=0
+  local current_inner=0 current_outer=0 current_plaintext=0 current_recoveries=0
+  local deadline=0 latched=1
+  local a_trips_before_clear=0 b_trips_before_clear=0
+  local a_recoveries_before_clear=0 b_recoveries_before_clear=0
+  local a_recoveries_after_clear=0 b_recoveries_after_clear=0
+  local a_recoveries_after_observe=0 b_recoveries_after_observe=0
+  local a_ready_before_clear="" b_ready_before_clear=""
+  local a_ready_after_clear="" b_ready_after_clear=""
+  local a_ready_after_observe="" b_ready_after_observe=""
+  local a_auto_recover_before_clear="" b_auto_recover_before_clear=""
+  local a_auto_recover_after_clear="" b_auto_recover_after_clear=""
+  local a_auto_recover_after_observe="" b_auto_recover_after_observe=""
+  local a_dials_before_apply=0 b_dials_before_apply=0
+  local a_dials_before_clear=0 b_dials_before_clear=0
+  local a_dials_after_clear=0 b_dials_after_clear=0
+  local a_dials_after_observe=0 b_dials_after_observe=0
+  local a_withdrawals=0 b_withdrawals=0 a_withdrawal_acks=0 b_withdrawal_acks=0
+  local a_withdrawal_ack_timeouts=0 b_withdrawal_ack_timeouts=0
+  local before_ok=1 netem_ok=1 clear_ok=1 after_ok=1
+
+  sleep "$netem_active_seconds"
+  collect_inner_gso_transition_snapshot before-clear
+  if [[ "$require_inner_gso_latched_fallback" == "1" ]]; then
+    before_inner="$(inner_gso_module_param_sum tx_plaintext_inner_gso_packets)" || before_ok=0
+    before_outer="$(inner_gso_module_param_sum tx_plaintext_outer_gso_packets)" || before_ok=0
+    before_plaintext="$(inner_gso_module_param_sum tx_plaintext_packets)" || before_ok=0
+    before_trips="$(inner_gso_module_param_sum inner_gso_circuit_trips)" || before_ok=0
+    a_trips_before_clear="$(inner_gso_module_param_uint a inner_gso_circuit_trips)" || before_ok=0
+    b_trips_before_clear="$(inner_gso_module_param_uint b inner_gso_circuit_trips)" || before_ok=0
+    a_recoveries_before_clear="$(inner_gso_module_param_uint a inner_gso_circuit_recoveries)" || before_ok=0
+    b_recoveries_before_clear="$(inner_gso_module_param_uint b inner_gso_circuit_recoveries)" || before_ok=0
+    a_ready_before_clear="$(inner_gso_module_param a inner_gso_runtime_ready)" || before_ok=0
+    b_ready_before_clear="$(inner_gso_module_param b inner_gso_runtime_ready)" || before_ok=0
+    a_auto_recover_before_clear="$(inner_gso_module_param a inner_gso_auto_recover)" || before_ok=0
+    b_auto_recover_before_clear="$(inner_gso_module_param b inner_gso_auto_recover)" || before_ok=0
+    a_dials_before_apply="$(transport_snapshot_counter a netem-before-apply session_dials)" || before_ok=0
+    b_dials_before_apply="$(transport_snapshot_counter b netem-before-apply session_dials)" || before_ok=0
+    a_dials_before_clear="$(transport_snapshot_counter a netem-before-clear session_dials)" || before_ok=0
+    b_dials_before_clear="$(transport_snapshot_counter b netem-before-clear session_dials)" || before_ok=0
+    a_withdrawals="$(transport_snapshot_extra_sum a netem-before-clear tix_tcp_capability_withdrawals)" || before_ok=0
+    b_withdrawals="$(transport_snapshot_extra_sum b netem-before-clear tix_tcp_capability_withdrawals)" || before_ok=0
+    a_withdrawal_acks="$(transport_snapshot_extra_sum a netem-before-clear tix_tcp_capability_withdrawal_acks)" || before_ok=0
+    b_withdrawal_acks="$(transport_snapshot_extra_sum b netem-before-clear tix_tcp_capability_withdrawal_acks)" || before_ok=0
+    a_withdrawal_ack_timeouts="$(transport_snapshot_extra_sum a netem-before-clear tix_tcp_capability_withdrawal_ack_timeouts)" || before_ok=0
+    b_withdrawal_ack_timeouts="$(transport_snapshot_extra_sum b netem-before-clear tix_tcp_capability_withdrawal_ack_timeouts)" || before_ok=0
+    [[ "$before_inner" -gt 0 && "$before_outer" -gt 0 && "$before_plaintext" -gt 0 && "$before_trips" -gt 0 ]] || before_ok=0
+    [[ "$a_trips_before_clear" -gt 0 && "$b_trips_before_clear" -gt 0 ]] || before_ok=0
+    [[ "$a_recoveries_before_clear" -eq 0 && "$b_recoveries_before_clear" -eq 0 ]] || before_ok=0
+    [[ "$a_ready_before_clear" == "N" && "$b_ready_before_clear" == "N" ]] || before_ok=0
+    [[ "$a_auto_recover_before_clear" == "N" && "$b_auto_recover_before_clear" == "N" ]] || before_ok=0
+    [[ "$a_dials_before_apply" -eq "$a_dials_before_clear" ]] || before_ok=0
+    [[ "$b_dials_before_apply" -eq "$b_dials_before_clear" ]] || before_ok=0
+    [[ "$a_withdrawals" -gt 0 && "$a_withdrawal_acks" -ge "$a_withdrawals" && "$a_withdrawal_ack_timeouts" -eq 0 ]] || before_ok=0
+    [[ "$b_withdrawals" -gt 0 && "$b_withdrawal_acks" -ge "$b_withdrawals" && "$b_withdrawal_ack_timeouts" -eq 0 ]] || before_ok=0
+    {
+      printf 'format=trustix-inner-gso-latched-fallback-v1\n'
+      printf 'netem_active_seconds=%s\n' "$netem_active_seconds"
+      printf 'fallback_observe_seconds=%s\n' "$inner_gso_latched_fallback_observe_seconds"
+      printf 'inner_gso_packets_before_clear=%s\n' "$before_inner"
+      printf 'outer_gso_packets_before_clear=%s\n' "$before_outer"
+      printf 'plaintext_packets_before_clear=%s\n' "$before_plaintext"
+      printf 'circuit_trips_before_clear=%s\n' "$before_trips"
+      printf 'a_circuit_trips_before_clear=%s\n' "$a_trips_before_clear"
+      printf 'b_circuit_trips_before_clear=%s\n' "$b_trips_before_clear"
+      printf 'a_circuit_recoveries_before_clear=%s\n' "$a_recoveries_before_clear"
+      printf 'b_circuit_recoveries_before_clear=%s\n' "$b_recoveries_before_clear"
+      printf 'a_runtime_ready_before_clear=%s\n' "$a_ready_before_clear"
+      printf 'b_runtime_ready_before_clear=%s\n' "$b_ready_before_clear"
+      printf 'a_auto_recover_before_clear=%s\n' "$a_auto_recover_before_clear"
+      printf 'b_auto_recover_before_clear=%s\n' "$b_auto_recover_before_clear"
+      printf 'a_session_dials_before_apply=%s\n' "$a_dials_before_apply"
+      printf 'b_session_dials_before_apply=%s\n' "$b_dials_before_apply"
+      printf 'a_session_dials_before_clear=%s\n' "$a_dials_before_clear"
+      printf 'b_session_dials_before_clear=%s\n' "$b_dials_before_clear"
+      printf 'a_capability_withdrawals_before_clear=%s\n' "$a_withdrawals"
+      printf 'b_capability_withdrawals_before_clear=%s\n' "$b_withdrawals"
+      printf 'a_capability_withdrawal_acks_before_clear=%s\n' "$a_withdrawal_acks"
+      printf 'b_capability_withdrawal_acks_before_clear=%s\n' "$b_withdrawal_acks"
+      printf 'a_capability_withdrawal_ack_timeouts_before_clear=%s\n' "$a_withdrawal_ack_timeouts"
+      printf 'b_capability_withdrawal_ack_timeouts_before_clear=%s\n' "$b_withdrawal_ack_timeouts"
+    } >"$contract"
+  fi
+
+  clear_netem_node a
+  clear_netem_node b
+  record_netem_evidence before-clear || netem_ok=0
+  printf 'cleared_at=%s\n' "$(date -Is)" >>"${workdir}/netem-transition.txt"
+
+  if [[ "$require_inner_gso_latched_fallback" != "1" ]]; then
+    [[ "$netem_ok" == "1" ]]
+    return
+  fi
+  [[ "$netem_ok" == "1" ]] || before_ok=0
+  if [[ "$before_ok" != "1" ]]; then
+    printf 'status=fail\nreason=netem, circuit trip, latch, or capability-withdrawal contract was not observed before clear\n' >>"$contract"
+    return 1
+  fi
+
+  collect_inner_gso_transition_snapshot after-clear
+  clear_inner="$(inner_gso_module_param_sum tx_plaintext_inner_gso_packets)" || clear_ok=0
+  clear_outer="$(inner_gso_module_param_sum tx_plaintext_outer_gso_packets)" || clear_ok=0
+  clear_plaintext="$(inner_gso_module_param_sum tx_plaintext_packets)" || clear_ok=0
+  clear_recoveries="$(inner_gso_module_param_sum inner_gso_circuit_recoveries)" || clear_ok=0
+  a_recoveries_after_clear="$(inner_gso_module_param_uint a inner_gso_circuit_recoveries)" || clear_ok=0
+  b_recoveries_after_clear="$(inner_gso_module_param_uint b inner_gso_circuit_recoveries)" || clear_ok=0
+  a_ready_after_clear="$(inner_gso_module_param a inner_gso_runtime_ready)" || clear_ok=0
+  b_ready_after_clear="$(inner_gso_module_param b inner_gso_runtime_ready)" || clear_ok=0
+  a_auto_recover_after_clear="$(inner_gso_module_param a inner_gso_auto_recover)" || clear_ok=0
+  b_auto_recover_after_clear="$(inner_gso_module_param b inner_gso_auto_recover)" || clear_ok=0
+  a_dials_after_clear="$(transport_snapshot_counter a netem-after-clear session_dials)" || clear_ok=0
+  b_dials_after_clear="$(transport_snapshot_counter b netem-after-clear session_dials)" || clear_ok=0
+  [[ "$a_recoveries_after_clear" -eq "$a_recoveries_before_clear" && "$b_recoveries_after_clear" -eq "$b_recoveries_before_clear" ]] || clear_ok=0
+  [[ "$a_ready_after_clear" == "N" && "$b_ready_after_clear" == "N" ]] || clear_ok=0
+  [[ "$a_auto_recover_after_clear" == "N" && "$b_auto_recover_after_clear" == "N" ]] || clear_ok=0
+  [[ "$a_dials_after_clear" -eq "$a_dials_before_clear" && "$b_dials_after_clear" -eq "$b_dials_before_clear" ]] || clear_ok=0
+  {
+    printf 'inner_gso_packets_after_clear=%s\n' "$clear_inner"
+    printf 'outer_gso_packets_after_clear=%s\n' "$clear_outer"
+    printf 'plaintext_packets_after_clear=%s\n' "$clear_plaintext"
+    printf 'circuit_recoveries_after_clear=%s\n' "$clear_recoveries"
+    printf 'a_circuit_recoveries_after_clear=%s\n' "$a_recoveries_after_clear"
+    printf 'b_circuit_recoveries_after_clear=%s\n' "$b_recoveries_after_clear"
+    printf 'a_runtime_ready_after_clear=%s\n' "$a_ready_after_clear"
+    printf 'b_runtime_ready_after_clear=%s\n' "$b_ready_after_clear"
+    printf 'a_auto_recover_after_clear=%s\n' "$a_auto_recover_after_clear"
+    printf 'b_auto_recover_after_clear=%s\n' "$b_auto_recover_after_clear"
+    printf 'a_session_dials_after_clear=%s\n' "$a_dials_after_clear"
+    printf 'b_session_dials_after_clear=%s\n' "$b_dials_after_clear"
+  } >>"$contract"
+  if [[ "$clear_ok" != "1" ]]; then
+    printf 'status=fail\nreason=inner-GSO circuit did not remain latched immediately after netem clear\n' >>"$contract"
+    return 1
+  fi
+
+  deadline=$((SECONDS + inner_gso_latched_fallback_observe_seconds))
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    current_recoveries="$(inner_gso_module_param_sum inner_gso_circuit_recoveries)" || {
+      latched=0
+      break
+    }
+    if [[ "$current_recoveries" -ne "$clear_recoveries" ]] ||
+      ! inner_gso_runtime_ready_state_on_both_nodes N ||
+      ! inner_gso_auto_recover_disabled_on_both_nodes; then
+      latched=0
+      break
+    fi
+    sleep 1
+  done
+  collect_inner_gso_transition_snapshot after-latched-fallback
+  a_recoveries_after_observe="$(inner_gso_module_param_uint a inner_gso_circuit_recoveries)" || after_ok=0
+  b_recoveries_after_observe="$(inner_gso_module_param_uint b inner_gso_circuit_recoveries)" || after_ok=0
+  current_recoveries="$(inner_gso_module_param_sum inner_gso_circuit_recoveries)" || after_ok=0
+  current_inner="$(inner_gso_module_param_sum tx_plaintext_inner_gso_packets)" || after_ok=0
+  current_outer="$(inner_gso_module_param_sum tx_plaintext_outer_gso_packets)" || after_ok=0
+  current_plaintext="$(inner_gso_module_param_sum tx_plaintext_packets)" || after_ok=0
+  a_ready_after_observe="$(inner_gso_module_param a inner_gso_runtime_ready)" || after_ok=0
+  b_ready_after_observe="$(inner_gso_module_param b inner_gso_runtime_ready)" || after_ok=0
+  a_auto_recover_after_observe="$(inner_gso_module_param a inner_gso_auto_recover)" || after_ok=0
+  b_auto_recover_after_observe="$(inner_gso_module_param b inner_gso_auto_recover)" || after_ok=0
+  a_dials_after_observe="$(transport_snapshot_counter a netem-after-latched-fallback session_dials)" || after_ok=0
+  b_dials_after_observe="$(transport_snapshot_counter b netem-after-latched-fallback session_dials)" || after_ok=0
+  [[ "$current_inner" -eq "$clear_inner" ]] || after_ok=0
+  [[ "$current_outer" -gt "$clear_outer" && "$current_plaintext" -gt "$clear_plaintext" ]] || after_ok=0
+  [[ "$a_recoveries_after_observe" -eq "$a_recoveries_before_clear" && "$b_recoveries_after_observe" -eq "$b_recoveries_before_clear" ]] || after_ok=0
+  [[ "$a_ready_after_observe" == "N" && "$b_ready_after_observe" == "N" ]] || after_ok=0
+  [[ "$a_auto_recover_after_observe" == "N" && "$b_auto_recover_after_observe" == "N" ]] || after_ok=0
+  [[ "$a_dials_after_observe" -eq "$a_dials_after_clear" && "$b_dials_after_observe" -eq "$b_dials_after_clear" ]] || after_ok=0
+  {
+    printf 'inner_gso_packets_after_observe=%s\n' "$current_inner"
+    printf 'outer_gso_packets_after_observe=%s\n' "$current_outer"
+    printf 'plaintext_packets_after_observe=%s\n' "$current_plaintext"
+    printf 'circuit_recoveries_after_observe=%s\n' "$current_recoveries"
+    printf 'a_circuit_recoveries_after_observe=%s\n' "$a_recoveries_after_observe"
+    printf 'b_circuit_recoveries_after_observe=%s\n' "$b_recoveries_after_observe"
+    printf 'a_runtime_ready_after_observe=%s\n' "$a_ready_after_observe"
+    printf 'b_runtime_ready_after_observe=%s\n' "$b_ready_after_observe"
+    printf 'a_auto_recover_after_observe=%s\n' "$a_auto_recover_after_observe"
+    printf 'b_auto_recover_after_observe=%s\n' "$b_auto_recover_after_observe"
+    printf 'a_session_dials_after_observe=%s\n' "$a_dials_after_observe"
+    printf 'b_session_dials_after_observe=%s\n' "$b_dials_after_observe"
+  } >>"$contract"
+  if [[ "$latched" != "1" || "$after_ok" != "1" ]]; then
+    printf 'status=fail\nreason=inner-GSO restarted, sessions re-dialed, or reliable outer-GSO fallback stopped after netem clear\n' >>"$contract"
+    return 1
+  fi
+  printf 'status=pass\n' >>"$contract"
+}
+
+schedule_netem_transition() {
+  [[ "$netem_active_seconds" -gt 0 ]] || return 0
+  (
+    set -Eeuo pipefail
+    run_netem_transition
+  ) >"${workdir}/netem-transition.log" 2>&1 &
+  netem_transition_pid=$!
+}
+
+wait_netem_transition() {
+  local rc=0
+  [[ -n "$netem_transition_pid" ]] || return 0
+  wait "$netem_transition_pid" || rc=$?
+  netem_transition_pid=""
+  if [[ "$rc" -ne 0 ]]; then
+    log "netem transition failed; see ${workdir}/netem-transition.log"
+    return "$rc"
+  fi
+}
+
+verify_netem_evidence_after_traffic() {
+  netem_enabled || return 0
+  if [[ "$netem_active_seconds" -gt 0 ]]; then
+    grep -Fqx 'status=pass' "${workdir}/netem-evidence-before-clear.txt"
+    return
+  fi
+  collect_netem_state_node a final
+  collect_netem_state_node b final
+  record_netem_evidence final
+}
+
+cancel_netem_transition() {
+  [[ -n "$netem_transition_pid" ]] || return 0
+  if kill -0 "$netem_transition_pid" >/dev/null 2>&1; then
+    kill "$netem_transition_pid" >/dev/null 2>&1 || true
+  fi
+  wait "$netem_transition_pid" >/dev/null 2>&1 || true
+  netem_transition_pid=""
 }
 
 prepare_node_topology() {
@@ -1661,7 +2509,7 @@ transport_policy:
   mode: user_defined
   profile: $(case_transport_profile)
   datapath: $(case_transport_datapath)
-  mtu: 1500
+  mtu: ${transport_mtu}
   candidates:
 EOF
   for transport in "${endpoint_transports[@]}"; do
@@ -1820,7 +2668,7 @@ transport_policy:
   mode: user_defined
   profile: $(case_transport_profile)
   datapath: $(case_transport_datapath)
-  mtu: 1500
+  mtu: ${transport_mtu}
   candidates:
     - ${local_endpoint}
   failover: health_based
@@ -1949,6 +2797,9 @@ common_daemon_env() {
   fi
   if [[ -n "$secure_tix_tcp_inner_checksum_partial" ]]; then
     printf 'TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL=%s\n' "$secure_tix_tcp_inner_checksum_partial"
+  fi
+  if [[ -n "$tix_tcp_inner_gso" ]]; then
+    printf 'TRUSTIX_TIX_TCP_INNER_GSO=%s\n' "$tix_tcp_inner_gso"
   fi
 }
 
@@ -2232,6 +3083,8 @@ collect_failure_snapshot() {
   collect_host_state b || true
   collect_lan_state a || true
   collect_lan_state b || true
+  collect_netem_state_node a || true
+  collect_netem_state_node b || true
   collect_kernel_logs a || true
   collect_kernel_logs b || true
   fetch_from_node a "$remote_a" "$workdir/a" || true
@@ -2352,10 +3205,17 @@ lsmod | awk '/^trustix_/ {print}' >$(remote_quote "${dir}/${prefix}-lsmod.txt") 
 
 collect_module_parameters() {
   local node="$1"
-  local dir
+  local label="${2:-}"
+  local dir output
   dir="$(remote_dir "$node")"
+  if [[ -n "$label" ]]; then
+    [[ "$label" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+    output="${dir}/module-parameters-${label}.txt"
+  else
+    output="${dir}/module-parameters.txt"
+  fi
   run_node "$node" "set +e
-out=$(remote_quote "${dir}/module-parameters.txt")
+out=$(remote_quote "$output")
 : >\"\$out\"
 for module_dir in /sys/module/trustix_*/parameters; do
   [ -d \"\$module_dir\" ] || continue
@@ -2773,6 +3633,70 @@ exit \"\$rc\"
 "
 }
 
+assert_iperf_continuity() {
+  local node="$1"
+  local out_name="$2"
+  local label="$3"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "cat $(remote_quote "${dir}/${out_name}")" | python3 -c '
+import json
+import sys
+
+label = sys.argv[1]
+mode = sys.argv[2]
+max_allowed = int(sys.argv[3])
+payload = json.load(sys.stdin)
+intervals = payload.get("intervals") or []
+if not isinstance(intervals, list) or not intervals:
+    raise SystemExit(f"{label}: iperf JSON has no throughput intervals")
+directions = [("reverse" if mode == "reverse" else "forward", "sum")]
+if mode == "bidir":
+    directions.append(("reverse", "sum_bidir_reverse"))
+rows = []
+failed = False
+for direction, key in directions:
+    missing = 0
+    zero = 0
+    run = 0
+    max_run = 0
+    for interval in intervals:
+        summary = interval.get(key) if isinstance(interval, dict) else None
+        if not isinstance(summary, dict):
+            missing += 1
+            run += 1
+            max_run = max(max_run, run)
+            continue
+        value = summary.get("bits_per_second")
+        if not isinstance(value, (int, float)) or value <= 0:
+            zero += 1
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    status = "pass" if missing == 0 and max_run <= max_allowed else "fail"
+    rows.append({
+        "direction": direction,
+        "intervals": len(intervals),
+        "missing_intervals": missing,
+        "zero_intervals": zero,
+        "max_consecutive_zero_intervals": max_run,
+        "allowed": max_allowed,
+        "status": status,
+    })
+    failed = failed or status != "pass"
+print(json.dumps({"label": label, "directions": rows, "status": "fail" if failed else "pass"}, sort_keys=True))
+if failed:
+    details = ", ".join(
+        "{direction}:missing={missing_intervals},zero={zero_intervals},max_run={max_consecutive_zero_intervals}".format(**row)
+        for row in rows
+    )
+    raise SystemExit(
+        f"{label}: iperf continuity failed ({details}); allowed consecutive zero intervals={max_allowed}"
+    )
+' "$label" "$iperf_mode" "$max_consecutive_zero_intervals" | tee -a "$workdir/iperf-continuity-gates.jsonl"
+}
+
 run_iperf_client_with_snapshot() {
   local node="$1"
   local dst_ip="$2"
@@ -2789,7 +3713,11 @@ run_iperf_client_with_snapshot() {
   snapshot_label="${snapshot_label#iperf3-}"
   collect_transport_snapshot "during-${snapshot_label}"
   if wait "$client_pid"; then
-    return 0
+    if assert_iperf_continuity "$node" "$out_name" "$snapshot_label"; then
+      return 0
+    else
+      rc=$?
+    fi
   else
     rc=$?
   fi
@@ -2979,6 +3907,12 @@ run_pinned_mixed_iperf_direction() {
   fi
   wait_iperf_server_exit "$server" "$iperf_port" udp
   wait_iperf_server_exit "$server" "$mixed_iperf_port" tix-tcp
+  if [[ "$udp_rc" -eq 0 ]] && ! assert_iperf_continuity "$client" "$udp_out" "${pair_label}-udp-${suffix}"; then
+    udp_rc=1
+  fi
+  if [[ "$tix_tcp_rc" -eq 0 ]] && ! assert_iperf_continuity "$client" "$tix_tcp_out" "${pair_label}-tix-tcp-${suffix}"; then
+    tix_tcp_rc=1
+  fi
   if [[ "$udp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$udp_out" "${pair_label}-udp-${suffix}" "$mixed_udp_min_gbps"; then
     udp_rc=1
   fi
@@ -3037,7 +3971,11 @@ run_iperf_bidirectional_artifacts() {
       if [[ "$client_rc" -ne 0 ]]; then
         if iperf_client_missing_server_results_only a "$out_name" && iperf_server_has_final_summary b; then
           accept_iperf_server_summary_artifact b "a-to-b-${suffix}"
-          log "iperf a-to-b client missed server results; accepting server-side summary artifact"
+          if assert_iperf_continuity b "iperf3-server.json" "a-to-b-${suffix}-server"; then
+            log "iperf a-to-b client missed server results; accepting server-side summary artifact"
+          else
+            rc=1
+          fi
         else
           rc=$client_rc
         fi
@@ -3056,7 +3994,11 @@ run_iperf_bidirectional_artifacts() {
       if [[ "$client_rc" -ne 0 ]]; then
         if iperf_client_missing_server_results_only b "$out_name" && iperf_server_has_final_summary a; then
           accept_iperf_server_summary_artifact a "b-to-a-${suffix}"
-          log "iperf b-to-a client missed server results; accepting server-side summary artifact"
+          if assert_iperf_continuity a "iperf3-server.json" "b-to-a-${suffix}-server"; then
+            log "iperf b-to-a client missed server results; accepting server-side summary artifact"
+          else
+            rc=1
+          fi
         else
           rc=$client_rc
         fi
@@ -3157,6 +4099,7 @@ cleanup_node() {
   peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
   env_exports="$(daemon_env_exports)"
   unit="$(daemon_unit_name "$node")"
+  clear_netem_node "$node" || true
   run_node "$node" "set +e
 ip_cmd=\$(command -v ip)
 cleanup_timeout=$(remote_quote "$cleanup_timeout")
@@ -3222,6 +4165,8 @@ collect_all() {
   collect_host_state b || true
   collect_lan_state a || true
   collect_lan_state b || true
+  collect_netem_state_node a || true
+  collect_netem_state_node b || true
   collect_binary_identity a || true
   collect_binary_identity b || true
   collect_kernel_logs a || true
@@ -3234,8 +4179,9 @@ fetch_all() {
 }
 
 cleanup_all() {
-  local rc=$? cleanup_rc=0 node_cleanup_rc stop_rc
+  local rc=$? cleanup_rc=0 node_cleanup_rc stop_rc netem_rc
   set +e
+  cancel_netem_transition
   collect_all
   stop_daemon a || {
     stop_rc=$?
@@ -3244,6 +4190,14 @@ cleanup_all() {
   stop_daemon b || {
     stop_rc=$?
     [[ "$rc" != "0" ]] || rc=$stop_rc
+  }
+  clear_netem_node a || {
+    netem_rc=$?
+    [[ "$rc" != "0" ]] || rc=$netem_rc
+  }
+  clear_netem_node b || {
+    netem_rc=$?
+    [[ "$rc" != "0" ]] || rc=$netem_rc
   }
   fetch_all
   if [[ "$rc" != "0" && -n "${workdir:-}" && -d "$workdir" ]]; then
@@ -3260,7 +4214,7 @@ cleanup_all() {
     [[ "$cleanup_rc" != "0" ]] || cleanup_rc=$node_cleanup_rc
   }
   if [[ "$cleanup_rc" != "0" ]]; then
-    log "cleanup timed out with status ${cleanup_rc}; preserving and fetching remote diagnostics"
+    log "cleanup failed with status ${cleanup_rc}; preserving and fetching remote diagnostics"
     fetch_all
     [[ "$rc" != "0" ]] || rc=$cleanup_rc
   fi
@@ -3274,6 +4228,8 @@ cleanup_all() {
 main() {
   parse_endpoint_transports
   validate_case
+  validate_netem_config
+  validate_transport_tuning_config
   resolve_pinned_mixed_lan
   apply_case_runtime_defaults
   case "$(case_fast_path)" in
@@ -3291,6 +4247,7 @@ main() {
     write_config b "$workdir/config-b.yaml"
     daemon_env >"$workdir/daemon-env.txt"
     write_pinned_mixed_contract
+    write_netem_contract
     printf 'dry_run_config\n' >"$workdir/${case_name}.result"
     log "dry-run-config result=${workdir}"
     return
@@ -3318,6 +4275,8 @@ main() {
   check_node_prereqs b
   resolve_underlay
   log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
+  daemon_env >"$workdir/daemon-env.txt"
+  write_netem_contract
   trap cleanup_all EXIT
   mark_kernel_log_start
   prepare_node_topology a
@@ -3338,8 +4297,15 @@ main() {
   wait_for_api b
   wait_for_endpoint_listeners
   run_connectivity_checks
+  if [[ "$require_inner_gso_latched_fallback" == "1" ]]; then
+    collect_transport_snapshot netem-before-apply
+  fi
+  apply_netem
   write_run_timing_start
+  schedule_netem_transition
   run_iperf_bidirectional_artifacts
+  wait_netem_transition
+  verify_netem_evidence_after_traffic
   assert_pinned_mixed_sessions
   write_run_timing_end
   collect_all

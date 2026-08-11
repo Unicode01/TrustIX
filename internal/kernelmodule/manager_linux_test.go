@@ -18,6 +18,34 @@ func TestLoadParametersWithBuildSHAOverridesUserValue(t *testing.T) {
 	}
 }
 
+func TestLoadParametersWithBuildSHAAcceptsOpenWrtParmTypeMetadata(t *testing.T) {
+	source := moduleSource{label: "openwrt.ko", payload: []byte("\x7fELF...parmtype=build_sha256:charp")}
+	parameters := loadParametersWithBuildSHA(source, "prefer_software=1")
+	want := "prefer_software=1 build_sha256=" + moduleSourceSHA256(source)
+	if parameters != want {
+		t.Fatalf("parameters = %q, want %q", parameters, want)
+	}
+}
+
+func TestModulePayloadSupportsParameterMetadataForms(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload []byte
+		key     string
+		want    bool
+	}{
+		"description": {payload: []byte("parm=build_sha256:fingerprint"), key: "build_sha256", want: true},
+		"type only":   {payload: []byte("parmtype=build_sha256:charp"), key: "build_sha256", want: true},
+		"other key":   {payload: []byte("parmtype=features:ullong"), key: "build_sha256"},
+		"empty key":   {payload: []byte("parmtype=build_sha256:charp")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := modulePayloadSupportsParameter(tc.payload, tc.key); got != tc.want {
+				t.Fatalf("modulePayloadSupportsParameter() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadParametersWithBuildSHARemovesReservedValueWhenUnsupported(t *testing.T) {
 	source := moduleSource{label: "test.ko", payload: []byte("\x7fELF...old module")}
 	parameters := loadParametersWithBuildSHA(source, "prefer_software=1 build_sha256=bad")

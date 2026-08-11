@@ -600,16 +600,21 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		params = addModuleParameterMask(params, "enable_features", 1<<7)
 		if fullPlaintext {
 			params = addModuleParameterMask(params, "enable_features", 1<<10)
-			if envTruthyAny("TRUSTIX_TIX_TCP_INNER_GSO") {
+			innerGSO := !envFalsey("TRUSTIX_TIX_TCP_INNER_GSO")
+			if secureTIXTCPFullDatapath && !envTruthyAny("TRUSTIX_TIX_TCP_INNER_GSO") {
+				innerGSO = false
+			}
+			if innerGSO {
 				params = addModuleParameterMask(params, "enable_features", 1<<11)
 			} else {
 				params = removeModuleParameterMask(params, "enable_features", 1<<11)
 			}
 			if envFalsey("TRUSTIX_TIX_TCP_PORT_SHARDING") {
-				params = removeModuleParameterMask(params, "enable_features", 1<<12)
+				params = removeModuleParameterMask(params, "enable_features", (1<<11)|(1<<12))
 			} else {
 				params = addModuleParameterMask(params, "enable_features", 1<<12)
 			}
+			params = setModuleParameter(params, "inner_gso_auto_recover", "0")
 			if secureTIXTCPFullDatapath {
 				params = addModuleParameterMask(params, "enable_features", 1<<13)
 				if envFalsey("TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL") {
@@ -1278,6 +1283,7 @@ func appendModuleParameterFromEnvIfMissing(params, key, envName string) string {
 }
 
 var trustIXDatapathPanicRiskModuleParameters = map[string]struct{}{
+	"inner_gso_auto_recover":                     {},
 	"rx_worker_inline_pair_flush_jiffies":        {},
 	"rx_worker_stream_coalesce_partial_csum":     {},
 	"rx_worker_xmit_tcp_partial_csum":            {},

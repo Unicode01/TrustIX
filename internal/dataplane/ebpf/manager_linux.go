@@ -196,6 +196,8 @@ type Manager struct {
 	tixTCPCapabilityProbeAttempts               uint64
 	tixTCPCapabilityProbeCacheHits              uint64
 	tixTCPCapabilityProbeErrors                 uint64
+	tixTCPInnerGSORuntimeProbe                  tixTCPInnerGSORuntimeProbeResult
+	tixTCPInnerGSORuntimeProbeValid             bool
 	kernelTransportXDPPortFlags                 map[uint16]uint8
 	tixTCPFastPath                              *tixTCPFastPath
 	tixTCPRawFD                                 int
@@ -1195,6 +1197,7 @@ const (
 	kernelCryptoOpenRetryAttempts                                     = 20
 	kernelCryptoOpenRetryDelay                                        = 10 * time.Millisecond
 	tixTCPCapabilityProbeTTL                                          = time.Second
+	tixTCPInnerGSORuntimeProbeTTL                                     = 25 * time.Millisecond
 	tunnelCapabilityCacheTTL                                          = 30 * time.Second
 )
 
@@ -1558,6 +1561,12 @@ type tixTCPCapabilityProbeResult struct {
 	reason                        string
 	err                           error
 	expiresAt                     time.Time
+}
+
+type tixTCPInnerGSORuntimeProbeResult struct {
+	ready     bool
+	reason    string
+	expiresAt time.Time
 }
 
 type persistedDataplaneState struct {
@@ -2755,6 +2764,7 @@ func (manager *Manager) tixTCPCapabilitiesLocked() (dataplane.TIXTCPCapabilities
 	}
 	if !capabilities.FullPlaintextKernel && !capabilities.FullSecureKernel {
 		manager.tixTCPCapabilityProbeValid = false
+		manager.tixTCPInnerGSORuntimeProbeValid = false
 		return capabilities, "", nil
 	}
 	partial, securePartial, innerGSO, portSharding, reason, err := manager.tixTCPCapabilityProbeCachedLocked(
@@ -2763,9 +2773,37 @@ func (manager *Manager) tixTCPCapabilitiesLocked() (dataplane.TIXTCPCapabilities
 	)
 	capabilities.InnerTCPChecksumPartial = partial
 	capabilities.SecureInnerTCPChecksumPartial = securePartial
+	if innerGSO {
+		innerGSO, reason = manager.tixTCPInnerGSORuntimeStatusCachedLocked(
+			time.Now(),
+			func() (uint64, bool) {
+				return readTrustIXModuleParamUint64("trustix_datapath", "inner_gso_runtime_ready")
+			},
+		)
+	}
 	capabilities.InnerGSO = innerGSO
 	capabilities.PortSharding = portSharding
 	return capabilities, reason, err
+}
+
+func (manager *Manager) tixTCPInnerGSORuntimeStatusCachedLocked(
+	now time.Time,
+	probe func() (uint64, bool),
+) (bool, string) {
+	if manager.tixTCPInnerGSORuntimeProbeValid &&
+		now.Before(manager.tixTCPInnerGSORuntimeProbe.expiresAt) {
+		cached := manager.tixTCPInnerGSORuntimeProbe
+		return cached.ready, cached.reason
+	}
+	value, available := probe()
+	ready, reason := tixTCPInnerGSORuntimeStatus(value, available)
+	manager.tixTCPInnerGSORuntimeProbe = tixTCPInnerGSORuntimeProbeResult{
+		ready:     ready,
+		reason:    reason,
+		expiresAt: now.Add(tixTCPInnerGSORuntimeProbeTTL),
+	}
+	manager.tixTCPInnerGSORuntimeProbeValid = true
+	return ready, reason
 }
 
 func (manager *Manager) tixTCPCapabilityProbeCachedLocked(
@@ -2816,6 +2854,16 @@ func (manager *Manager) tixTCPCapabilityProbeUncachedLocked() (bool, bool, bool,
 	}
 	innerGSO, errReason := manager.tixTCPInnerGSOReceiveReadyLocked()
 	return true, securePartial, innerGSO, portSharding, errReason, nil
+}
+
+func tixTCPInnerGSORuntimeStatus(value uint64, available bool) (bool, string) {
+	if !available {
+		return false, "kernel datapath inner GSO reliability status is unavailable"
+	}
+	if value == 0 {
+		return false, "kernel datapath inner GSO runtime circuit is open"
+	}
+	return true, ""
 }
 
 func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
@@ -13004,6 +13052,60 @@ func addKernelDatapathModuleStats(stats map[string]uint64) {
 		"rx_worker_checksum_errors",
 		"rx_worker_inner_tcp_checksum_partial_errors",
 		"rx_worker_inner_gso_errors",
+		"rx_worker_inner_gso_malformed",
+		"rx_worker_inner_gso_continuation_drops",
+		"rx_worker_inner_gso_session_clears",
+		"rx_worker_inner_gso_session_slots_cleared",
+		"rx_worker_inner_gso_continuation_orphans",
+		"rx_worker_inner_gso_sequence_gaps",
+		"rx_worker_inner_gso_sequence_gap_ahead",
+		"rx_worker_inner_gso_sequence_gap_behind",
+		"rx_worker_inner_gso_timeouts",
+		"rx_worker_inner_gso_timeouts_on_start",
+		"rx_worker_inner_gso_timeouts_on_append",
+		"rx_worker_inner_gso_timeouts_on_sweep",
+		"rx_worker_inner_gso_timeout_missing_bytes",
+		"rx_worker_inner_gso_timeout_max_missing_bytes",
+		"rx_worker_inner_gso_collisions",
+		"rx_worker_inner_gso_oom",
+		"rx_worker_inner_gso_reassembly_started",
+		"rx_worker_inner_gso_reassembly_completed",
+		"rx_worker_inner_gso_reassembly_high_watermark",
+		"rx_worker_inner_gso_continuation_matched",
+		"rx_worker_inner_gso_duplicate_starts",
+		"rx_worker_tix_tcp_claimed_drops",
+		"inner_gso_runtime_ready",
+		"inner_gso_auto_recover",
+		"inner_gso_fault_threshold",
+		"inner_gso_fault_window_ms",
+		"inner_gso_timeout_threshold",
+		"inner_gso_timeout_ratio_ppm",
+		"inner_gso_timeout_window_ms",
+		"inner_gso_reassembly_timeout_ms",
+		"inner_gso_no_progress_ms",
+		"inner_gso_cooldown_ms",
+		"inner_gso_max_cooldown_ms",
+		"inner_gso_stable_ms",
+		"inner_gso_runtime_faults",
+		"inner_gso_circuit_trips",
+		"inner_gso_timeout_circuit_trips",
+		"inner_gso_timeout_success_credit",
+		"inner_gso_timeout_last_ratio_ppm",
+		"inner_gso_timeout_ratio_suppressions",
+		"inner_gso_no_progress_circuit_trips",
+		"inner_gso_circuit_recoveries",
+		"inner_gso_probation_arms",
+		"inner_gso_probation_claims",
+		"inner_gso_probation_successes",
+		"inner_gso_probation_failures",
+		"inner_gso_probation_idle_resets",
+		"inner_gso_probation_evictions",
+		"inner_gso_probation_collisions",
+		"inner_gso_last_no_progress_ms",
+		"inner_gso_backoff_level",
+		"inner_gso_last_cooldown_ms",
+		"tx_plaintext_tix_tcp_ordered_xmits",
+		"tx_plaintext_tix_tcp_sequence_assign_errors",
 		"tx_plaintext_gso_errors",
 		"tx_plaintext_outer_gso_errors",
 		"tx_plaintext_ipv4_fragment_errors",

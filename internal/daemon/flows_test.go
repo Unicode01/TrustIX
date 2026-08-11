@@ -6904,61 +6904,65 @@ func TestDropSessionDoesNotInvalidateOtherInFlightDials(t *testing.T) {
 func TestDropRuntimeSessionRefillsWarmSessionPool(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_POOL_WARMUP_DEADLINE", "500ms")
 	t.Setenv("TRUSTIX_DATA_SESSION_POOL_WARMUP_RETRY_DELAY", "5ms")
-	peer := testPeer()
-	endpoint := peer.Endpoints[0]
-	endpoint.Transport = string(transport.ProtocolTCP)
-	endpoint.Address = "192.0.2.20:7000"
-	endpoint.Security.LinkTLS = endpointLinkTLSUnsupported
-	peer.Endpoints = []config.EndpointConfig{endpoint}
-	fake := &flakyWarmupTransport{name: transport.ProtocolTCP}
-	registry := transport.NewRegistry()
-	if err := registry.Register(fake); err != nil {
-		t.Fatalf("register warmup transport: %v", err)
-	}
-	key := dataSessionKey{
-		Peer:       peer.ID,
-		Endpoint:   endpoint.Name,
-		Transport:  transport.ProtocolTCP,
-		Address:    endpoint.Address,
-		Encryption: securetransport.EncryptionPlaintext,
-		PoolIndex:  1,
-	}
-	session := &recordingSession{}
-	runtime := &dataSessionRuntime{key: key, session: session, peer: peer, endpoint: endpoint}
-	daemon := &Daemon{
-		desired: config.Desired{
-			Peers: []config.PeerConfig{peer},
-			TransportPolicy: config.TransportPolicyConfig{
+	for _, poolSize := range []int{1, 2} {
+		t.Run(fmt.Sprintf("size-%d", poolSize), func(t *testing.T) {
+			peer := testPeer()
+			endpoint := peer.Endpoints[0]
+			endpoint.Transport = string(transport.ProtocolTCP)
+			endpoint.Address = "192.0.2.20:7000"
+			endpoint.Security.LinkTLS = endpointLinkTLSUnsupported
+			peer.Endpoints = []config.EndpointConfig{endpoint}
+			fake := &flakyWarmupTransport{name: transport.ProtocolTCP}
+			registry := transport.NewRegistry()
+			if err := registry.Register(fake); err != nil {
+				t.Fatalf("register warmup transport: %v", err)
+			}
+			key := dataSessionKey{
+				Peer:       peer.ID,
+				Endpoint:   endpoint.Name,
+				Transport:  transport.ProtocolTCP,
+				Address:    endpoint.Address,
 				Encryption: securetransport.EncryptionPlaintext,
-				SessionPool: config.SessionPoolPolicyConfig{
-					Size:   2,
-					Warmup: true,
+				PoolIndex:  poolSize - 1,
+			}
+			session := &recordingSession{}
+			runtime := &dataSessionRuntime{key: key, session: session, peer: peer, endpoint: endpoint}
+			daemon := &Daemon{
+				desired: config.Desired{
+					Peers: []config.PeerConfig{peer},
+					TransportPolicy: config.TransportPolicyConfig{
+						Encryption: securetransport.EncryptionPlaintext,
+						SessionPool: config.SessionPoolPolicyConfig{
+							Size:   poolSize,
+							Warmup: true,
+						},
+					},
 				},
-			},
-		},
-		transports:       registry,
-		dataSessions:     map[dataSessionKey]transport.Session{key: session},
-		dataSessionState: map[dataSessionKey]*dataSessionRuntime{key: runtime},
-	}
+				transports:       registry,
+				dataSessions:     map[dataSessionKey]transport.Session{key: session},
+				dataSessionState: map[dataSessionKey]*dataSessionRuntime{key: runtime},
+			}
 
-	daemon.dropRuntimeSession(runtime)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		daemon.dataMu.Lock()
-		count := len(daemon.dataSessions)
-		daemon.dataMu.Unlock()
-		if count == 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	daemon.dataMu.Lock()
-	defer daemon.dataMu.Unlock()
-	if got := len(daemon.dataSessions); got != 2 {
-		t.Fatalf("warm session pool size after runtime drop = %d, want 2", got)
-	}
-	if !session.closed.Load() {
-		t.Fatal("dropped session was not closed")
+			daemon.dropRuntimeSession(runtime)
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				daemon.dataMu.Lock()
+				count := len(daemon.dataSessions)
+				daemon.dataMu.Unlock()
+				if count == poolSize {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			daemon.dataMu.Lock()
+			defer daemon.dataMu.Unlock()
+			if got := len(daemon.dataSessions); got != poolSize {
+				t.Fatalf("warm session pool size after runtime drop = %d, want %d", got, poolSize)
+			}
+			if !session.closed.Load() {
+				t.Fatal("dropped session was not closed")
+			}
+		})
 	}
 }
 

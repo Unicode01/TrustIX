@@ -691,7 +691,7 @@ func moduleSourceSupportsBuildSHA(source moduleSource) bool {
 	if !ok {
 		return false
 	}
-	return bytes.Contains(payload, []byte("parm="+moduleBuildSHAParam+":"))
+	return modulePayloadSupportsParameter(payload, moduleBuildSHAParam)
 }
 
 func moduleSourceBytes(source moduleSource) ([]byte, bool) {
@@ -809,10 +809,19 @@ func loadedModuleLoadTimeParameterMismatches(name string, source moduleSource, p
 
 func moduleSourceSupportsParameter(source moduleSource, key string) bool {
 	payload, ok := moduleSourceBytes(source)
-	if !ok || strings.TrimSpace(key) == "" {
+	if !ok {
 		return false
 	}
-	return bytes.Contains(payload, []byte("parm="+strings.TrimSpace(key)+":"))
+	return modulePayloadSupportsParameter(payload, key)
+}
+
+func modulePayloadSupportsParameter(payload []byte, key string) bool {
+	key = strings.TrimSpace(key)
+	if len(payload) == 0 || key == "" {
+		return false
+	}
+	return bytes.Contains(payload, []byte("parm="+key+":")) ||
+		bytes.Contains(payload, []byte("parmtype="+key+":"))
 }
 
 func parseModuleParameters(parameters string) map[string]string {

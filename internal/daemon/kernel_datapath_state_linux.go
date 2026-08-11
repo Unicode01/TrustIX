@@ -81,14 +81,22 @@ var (
 
 func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) error {
 	daemon.kernelDatapathStateMu.Lock()
-	defer daemon.kernelDatapathStateMu.Unlock()
-	return daemon.syncKernelDatapathStateLocked(ctx, snapshot)
+	err := daemon.syncKernelDatapathStateLocked(ctx, snapshot)
+	daemon.kernelDatapathStateMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return daemon.markKernelDatapathPlaintextSessionsReady(ctx)
 }
 
 func (daemon *Daemon) syncCurrentKernelDatapathState(ctx context.Context) error {
 	daemon.kernelDatapathStateMu.Lock()
-	defer daemon.kernelDatapathStateMu.Unlock()
-	return daemon.syncKernelDatapathStateLocked(ctx, daemon.runtimeDataplaneSnapshot())
+	err := daemon.syncKernelDatapathStateLocked(ctx, daemon.runtimeDataplaneSnapshot())
+	daemon.kernelDatapathStateMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return daemon.markKernelDatapathPlaintextSessionsReady(ctx)
 }
 
 func (daemon *Daemon) syncKernelDatapathStateLocked(ctx context.Context, snapshot dataplane.Snapshot) error {
@@ -265,33 +273,44 @@ func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
 
 func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
 	if notifier, ok := session.(transport.KernelDatapathSessionStateChangeHookSetter); ok {
-		notifier.SetKernelDatapathSessionStateChangeHook(func() {
-			daemon.syncKernelDatapathSessionStateChange(key, runtime, session)
+		notifier.SetKernelDatapathSessionStateChangeHook(func() error {
+			return daemon.syncKernelDatapathSessionStateChange(key, runtime, session)
 		})
 	}
-	daemon.syncKernelDatapathSessionRecords(key, runtime, session)
-}
-
-func (daemon *Daemon) syncKernelDatapathSessionStateChange(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
-	if daemon == nil || session == nil {
-		return
+	ready, _ := daemon.syncKernelDatapathSessionRecords(key, runtime, session)
+	if ready {
+		daemon.finishKernelDatapathSessionReady(key, runtime, session)
 	}
-	daemon.syncKernelDatapathSessionRecords(key, runtime, session)
 }
 
-func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
+func (daemon *Daemon) syncKernelDatapathSessionStateChange(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) error {
+	if daemon == nil || session == nil {
+		return errors.New("kernel datapath session state change has no daemon or session")
+	}
+	ready, err := daemon.syncKernelDatapathSessionRecords(key, runtime, session)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return errors.New("kernel datapath session state change was not committed")
+	}
+	daemon.finishKernelDatapathSessionReady(key, runtime, session)
+	return nil
+}
+
+func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) (bool, error) {
 	daemon.kernelDatapathStateMu.Lock()
 	defer daemon.kernelDatapathStateMu.Unlock()
 
 	if !daemon.kernelDatapathSessionIsCurrent(key, runtime, session) {
-		return
+		return false, nil
 	}
 	if !daemon.kernelDatapathAvailable() {
-		return
+		return false, nil
 	}
 	records := daemon.kernelDatapathSessionStateRecords(key, runtime, session)
 	if len(records) == 0 {
-		return
+		return false, nil
 	}
 	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(
 		context.Background(), daemon.runtimeDataplaneSnapshot().Routes,
@@ -300,12 +319,60 @@ func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runti
 	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
 		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("upsert kernel datapath session: %w", err))
 		daemon.requestRuntimeReconcile("kernel datapath session upsert", err)
-		return
+		return false, fmt.Errorf("upsert kernel datapath session: %w", err)
 	}
 	if err := daemon.commitTIXTCPCryptoStateRecords(context.Background(), records); err != nil {
 		daemon.recordBackgroundError("kernel_datapath_crypto_state_sync", fmt.Errorf("commit tix_tcp crypto state: %w", err))
 		daemon.requestRuntimeReconcile("kernel datapath crypto state commit", err)
+		return false, fmt.Errorf("commit tix_tcp crypto state: %w", err)
 	}
+	return true, nil
+}
+
+func (daemon *Daemon) finishKernelDatapathSessionReady(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
+	if !daemon.kernelDatapathSessionIsCurrent(key, runtime, session) {
+		return
+	}
+	if err := daemon.markKernelDatapathSessionReady(context.Background(), session); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_session_ready", err)
+		daemon.requestRuntimeReconcile("kernel datapath session readiness", err)
+	}
+}
+
+func (daemon *Daemon) markKernelDatapathSessionReady(ctx context.Context, session transport.Session) error {
+	marker, ok := session.(transport.KernelDatapathSessionReadyMarker)
+	if !ok {
+		return nil
+	}
+	if err := marker.MarkKernelDatapathSessionReady(ctx); err != nil {
+		var closeErr error
+		if err := session.Close(); err != nil {
+			closeErr = fmt.Errorf("close session after kernel readiness failure: %w", err)
+		}
+		return errors.Join(
+			fmt.Errorf("advertise kernel datapath session readiness: %w", err),
+			closeErr,
+		)
+	}
+	return nil
+}
+
+func (daemon *Daemon) markKernelDatapathPlaintextSessionsReady(ctx context.Context) error {
+	var errs []error
+	for _, item := range daemon.kernelDatapathSessionSnapshot() {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		info, ok := kernelDatapathSessionInfo(item.session)
+		if !ok || info.Protocol != transport.ProtocolTIXTCP || info.Encrypted ||
+			!daemon.kernelDatapathSessionIsCurrent(item.key, item.runtime, item.session) {
+			continue
+		}
+		if err := daemon.markKernelDatapathSessionReady(ctx, item.session); err != nil {
+			errs = append(errs, fmt.Errorf("peer %q endpoint %q: %w", item.key.Peer, item.key.Endpoint, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (daemon *Daemon) syncKernelDatapathSessionDelete(key dataSessionKey, session transport.Session) {
@@ -866,7 +933,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial
 			continue
 		}
 		receive = receive || info.InnerTCPChecksumPartialLocal
-		send = send || info.InnerTCPChecksumPartialNegotiated
+		send = send || info.InnerTCPChecksumPartialPeer
 	}
 	return send, receive
 }
@@ -896,7 +963,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointInnerGSO(peer config.Pe
 			continue
 		}
 		receive = receive || info.InnerGSOLocal
-		send = send || info.InnerGSONegotiated
+		send = send || info.InnerGSOPeer
 	}
 	return send, receive
 }
@@ -919,7 +986,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointPortSharding(peer confi
 			continue
 		}
 		receive = receive || info.TIXTCPPortShardingLocal
-		send = send || info.TIXTCPPortShardingNegotiated
+		send = send || info.TIXTCPPortShardingPeer
 	}
 	return send, receive
 }
@@ -1399,9 +1466,9 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 		flags |= kernelDatapathSessionFlagFragmentingDatagram
 	}
 	if key.Transport == transport.ProtocolTIXTCP || info.Protocol == transport.ProtocolTIXTCP {
-		if info.SendEncrypted && info.SecureInnerTCPChecksumPartialNegotiated {
+		if info.SendEncrypted && info.SecureInnerTCPChecksumPartialPeer {
 			flags |= kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial
-		} else if !info.SendEncrypted && info.InnerTCPChecksumPartialNegotiated {
+		} else if !info.SendEncrypted && info.InnerTCPChecksumPartialPeer {
 			flags |= kernelDatapathSessionFlagSendInnerTCPChecksumPartial
 		}
 		if info.ReceiveEncrypted && info.SecureInnerTCPChecksumPartialLocal {
@@ -1409,13 +1476,13 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 		} else if !info.ReceiveEncrypted && info.InnerTCPChecksumPartialLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
 		}
-		if !info.SendEncrypted && info.InnerGSONegotiated {
+		if !info.SendEncrypted && info.InnerGSOPeer {
 			flags |= kernelDatapathSessionFlagSendInnerGSO
 		}
 		if !info.ReceiveEncrypted && info.InnerGSOLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerGSO
 		}
-		if info.TIXTCPPortShardingNegotiated {
+		if info.TIXTCPPortShardingPeer {
 			flags |= kernelDatapathSessionFlagSendTIXTCPPortSharding
 		}
 		if info.TIXTCPPortShardingLocal {

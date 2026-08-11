@@ -1704,6 +1704,19 @@ func (session *Session) RetainKernelFlowOnClose() {
 	}
 }
 
+func (session *Session) SetKernelDatapathSessionStateChangeHook(hook func() error) {
+	if setter, ok := session.inner.(transport.KernelDatapathSessionStateChangeHookSetter); ok {
+		setter.SetKernelDatapathSessionStateChangeHook(hook)
+	}
+}
+
+func (session *Session) MarkKernelDatapathSessionReady(ctx context.Context) error {
+	if marker, ok := session.inner.(transport.KernelDatapathSessionReadyMarker); ok {
+		return marker.MarkKernelDatapathSessionReady(ctx)
+	}
+	return nil
+}
+
 func (session *Session) KernelDatapathSessionInfo() (transport.KernelDatapathSessionInfo, bool) {
 	if session == nil {
 		return transport.KernelDatapathSessionInfo{}, false

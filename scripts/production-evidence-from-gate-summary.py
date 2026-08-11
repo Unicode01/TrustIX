@@ -260,6 +260,12 @@ def gate_family_class(gate_family: str) -> str:
         "owdeb_tix_tcp_full_kmod",
     }:
         return "tix_tcp_full_kmod"
+    if gate_family in {
+        "tix_tcp_inner_gso",
+        "dd_tix_tcp_inner_gso",
+        "owdeb_tix_tcp_inner_gso",
+    }:
+        return "tix_tcp_inner_gso"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
     if gate_family in {
@@ -328,6 +334,10 @@ def expected_runner_case(
     if gate_family in {"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod"}:
         return "tix-tcp-full-kmod"
     if gate_family == "owdeb_tix_tcp_full_kmod":
+        return "owdeb-tix-tcp-full-kmod"
+    if gate_family in {"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso"}:
+        return "tix-tcp-full-kmod"
+    if gate_family == "owdeb_tix_tcp_inner_gso":
         return "owdeb-tix-tcp-full-kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp"}:
         return "secure-kudp"
@@ -457,7 +467,7 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
                 want=want,
                 gate_family=gate_family,
             )
-    elif gate_class == "tix_tcp_full_kmod":
+    elif gate_class in {"tix_tcp_full_kmod", "tix_tcp_inner_gso"}:
         for key, got, want in [
             ("transport", transport, "tix_tcp"),
             ("encryption", encryption, "plaintext"),

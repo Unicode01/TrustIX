@@ -195,6 +195,8 @@ func TestTrustIXDatapathInnerGSOUsesClonesAndObservableDropOwnership(t *testing.
 		"rx_worker_inner_gso_partial_frames",
 		"rx_worker_inner_gso_malformed",
 		"rx_worker_inner_gso_errors",
+		"rx_worker_inner_gso_continuation_drops",
+		"rx_worker_tix_tcp_claimed_drops",
 	} {
 		if !strings.Contains(source, "module_param_named("+name+",") {
 			t.Fatalf("inner-GSO datapath counter %s is not exported", name)
@@ -216,6 +218,254 @@ func TestTrustIXDatapathInnerGSOUsesClonesAndObservableDropOwnership(t *testing.
 	if !strings.Contains(hook, "worker_inner_gso_candidate") ||
 		!strings.Contains(hook, "return worker_queued ? NF_DROP : NF_ACCEPT;") {
 		t.Fatalf("inner-GSO hook path must leave source skb ownership with netfilter:\n%s", hook)
+	}
+}
+
+func TestTrustIXDatapathInnerGSOFailClosedCircuitContract(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	source := string(body)
+	for _, want := range []string{
+		"module_param_cb(inner_gso_runtime_ready,",
+		"module_param_named(inner_gso_auto_recover,",
+		"module_param_named(inner_gso_timeout_threshold,",
+		"module_param_named(inner_gso_timeout_ratio_ppm,",
+		"module_param_named(inner_gso_timeout_window_ms,",
+		"module_param_named(inner_gso_reassembly_timeout_ms,",
+		"module_param_named(inner_gso_no_progress_ms,",
+		"module_param_named(inner_gso_runtime_faults,",
+		"module_param_named(inner_gso_circuit_trips,",
+		"module_param_named(inner_gso_timeout_circuit_trips,",
+		"module_param_named(inner_gso_timeout_success_credit,",
+		"module_param_named(inner_gso_timeout_last_ratio_ppm,",
+		"module_param_named(inner_gso_timeout_ratio_suppressions,",
+		"module_param_named(inner_gso_no_progress_circuit_trips,",
+		"module_param_named(inner_gso_circuit_recoveries,",
+		"module_param_named(inner_gso_probation_arms,",
+		"module_param_named(inner_gso_probation_claims,",
+		"module_param_named(inner_gso_probation_successes,",
+		"module_param_named(inner_gso_probation_failures,",
+		"module_param_named(inner_gso_probation_idle_resets,",
+		"module_param_named(inner_gso_probation_evictions,",
+		"module_param_named(inner_gso_probation_collisions,",
+		"module_param_named(inner_gso_last_no_progress_ms,",
+		"module_param_named(rx_worker_inner_gso_timeouts_on_sweep,",
+		"module_param_named(rx_worker_inner_gso_session_clears,",
+		"module_param_named(rx_worker_inner_gso_session_slots_cleared,",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("inner-GSO runtime circuit is missing %q", want)
+		}
+	}
+	recovery := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_runtime_ready_now")
+	if !strings.Contains(recovery, "READ_ONCE(trustix_datapath_inner_gso_auto_recover)") {
+		t.Fatalf("inner-GSO runtime circuit must stay latched unless automatic recovery is explicitly enabled:\n%s", recovery)
+	}
+	shard := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tix_tcp_port_shard_for_hash")
+	if !strings.Contains(shard, "1U +") ||
+		!strings.Contains(shard, "TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS - 1U") {
+		t.Fatalf("TIX-TCP data shard selection must reserve shard zero for compat control:\n%s", shard)
+	}
+	claim := daemonTestSourceFunctionBody(t, source, "trustix_datapath_claim_plaintext_tix_tcp_skb")
+	for _, want := range []string{
+		"trustix_datapath_session_wire_for_tuple_any_flow_locked",
+		"claimed = shard || marker || frame_magic",
+		"*continuation = !frame_magic",
+	} {
+		if !strings.Contains(claim, want) {
+			t.Fatalf("plaintext TIX-TCP fail-closed claim is missing %q:\n%s", want, claim)
+		}
+	}
+	hook := daemonTestSourceFunctionBody(t, source, "trustix_datapath_nf_hook")
+	for _, want := range []string{
+		"plaintext_rx_claimed =",
+		"trustix_datapath_inner_gso_record_runtime_fault()",
+		"worker_queued || secure_rx_claimed || plaintext_rx_claimed",
+	} {
+		if !strings.Contains(hook, want) {
+			t.Fatalf("plaintext TIX-TCP hook ownership is missing %q:\n%s", want, hook)
+		}
+	}
+	continuation := daemonTestSourceFunctionBody(t, source, "trustix_datapath_rx_worker_consume_inner_gso_continuation")
+	if !strings.Contains(continuation, "trustix_datapath_rx_worker_inner_gso_continuation_drops++") {
+		t.Fatalf("inner-GSO continuation consumer does not account drops:\n%s", continuation)
+	}
+	if !strings.Contains(continuation, "trustix_datapath_inner_gso_record_reassembly_success()") {
+		t.Fatalf("inner-GSO continuation consumer does not credit successful partial-frame reassembly:\n%s", continuation)
+	}
+	faultGate := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_error_trips_circuit")
+	for _, want := range []string{
+		"case 0:\n\tcase -ETIMEDOUT:",
+		"case -ENOENT:\n\tcase -EILSEQ:",
+		"Continuations after one missing frame are secondary symptoms.",
+		"default:\n\t\treturn true;",
+	} {
+		if !strings.Contains(faultGate, want) {
+			t.Fatalf("inner-GSO circuit does not deduplicate frame failure symptoms; missing %q:\n%s", want, faultGate)
+		}
+	}
+	if !strings.Contains(source, "#define TRUSTIX_DATAPATH_INNER_GSO_REASSEMBLY_SLOTS 128U") {
+		t.Fatal("inner-GSO reassembly capacity does not cover production multi-flow bursts")
+	}
+	if !strings.Contains(source, "#define TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_WINDOW_MS_DEFAULT 60000U") {
+		t.Fatal("inner-GSO timeout circuit does not cover sustained incomplete-frame degradation")
+	}
+	if !strings.Contains(source, "#define TRUSTIX_DATAPATH_INNER_GSO_TIMEOUT_RATIO_PPM_DEFAULT 50000U") {
+		t.Fatal("inner-GSO timeout circuit does not distinguish sparse loss from systemic incomplete frames")
+	}
+	ratioGate := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_timeout_ratio_trips")
+	for _, want := range []string{
+		"failures + successes",
+		"TRUSTIX_DATAPATH_INNER_GSO_RATIO_PPM_SCALE",
+		"return !ratio_ppm || observed >= ratio_ppm",
+	} {
+		if !strings.Contains(ratioGate, want) {
+			t.Fatalf("inner-GSO timeout ratio gate is missing %q:\n%s", want, ratioGate)
+		}
+	}
+	runtimeEvent := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_record_runtime_event")
+	for _, want := range []string{
+		"trustix_datapath_inner_gso_timeout_success_credit",
+		"trustix_datapath_inner_gso_timeout_ratio_suppressions++",
+		"trustix_datapath_inner_gso_timeout_last_ratio_ppm",
+	} {
+		if !strings.Contains(runtimeEvent, want) {
+			t.Fatalf("inner-GSO runtime event ratio protection is missing %q:\n%s", want, runtimeEvent)
+		}
+	}
+	cleanup := daemonTestSourceFunctionBody(t, source, "trustix_datapath_clear_inner_gso_reassembly_for_session")
+	for _, want := range []string{
+		"false, flow_id, epoch",
+		"trustix_datapath_rx_worker_inner_gso_session_clears++",
+		"trustix_datapath_rx_worker_inner_gso_session_slots_cleared += cleared",
+	} {
+		if !strings.Contains(cleanup, want) {
+			t.Fatalf("inner-GSO session cleanup is missing %q:\n%s", want, cleanup)
+		}
+	}
+	stateApply := daemonTestSourceFunctionBody(t, source, "trustix_datapath_state_apply_locked_maybe_rebuild")
+	for _, want := range []string{
+		"TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO",
+		"slot->value[0] != state->value[0]",
+		"slot->value[2] != state->value[2]",
+		"trustix_datapath_clear_inner_gso_reassembly_for_session(",
+		"trustix_datapath_clear_inner_gso_reassembly_for_all_sessions()",
+	} {
+		if !strings.Contains(stateApply, want) {
+			t.Fatalf("session state transition does not clear stale inner-GSO state; missing %q:\n%s", want, stateApply)
+		}
+	}
+	liveStart := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_reassembly_start_live")
+	for _, want := range []string{
+		"read_lock_bh(&trustix_datapath_state_lock)",
+		"trustix_datapath_plaintext_session_for_frame_locked(",
+		"TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO",
+		"ret = -EAGAIN",
+	} {
+		if !strings.Contains(liveStart, want) {
+			t.Fatalf("live inner-GSO admission race guard is missing %q:\n%s", want, liveStart)
+		}
+	}
+	for _, name := range []string{
+		"trustix_datapath_rx_worker_try_inner_gso",
+		"trustix_datapath_rx_worker_consume_inner_gso_continuation",
+	} {
+		fn := daemonTestSourceFunctionBody(t, source, name)
+		if !strings.Contains(fn, "trustix_datapath_inner_gso_reassembly_start_live(") {
+			t.Fatalf("%s bypasses live session admission for partial inner-GSO frames:\n%s", name, fn)
+		}
+	}
+	txGate := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_inner_gso_enabled")
+	if strings.Contains(txGate, "trustix_datapath_inner_gso_runtime_ready_now()") {
+		t.Fatalf("local inner-GSO RX faults must not suppress healthy TX toward a capable peer:\n%s", txGate)
+	}
+	for _, name := range []string{
+		"trustix_datapath_inner_gso_reassembly_start",
+		"trustix_datapath_inner_gso_reassembly_append",
+	} {
+		fn := daemonTestSourceFunctionBody(t, source, name)
+		if !strings.Contains(fn, "account_timeout_faults") ||
+			!strings.Contains(fn, "trustix_datapath_inner_gso_record_reassembly_timeout(") ||
+			!strings.Contains(fn, "expired_oldest_progress") {
+			t.Fatalf("%s does not feed expired partial frames into the timeout circuit:\n%s", name, fn)
+		}
+	}
+	sweep := daemonTestSourceFunctionBody(t, source, "trustix_datapath_sweep_inner_gso_reassembly")
+	for _, want := range []string{
+		"time_before(now, slot->expires)",
+		"trustix_datapath_inner_gso_reassembly_expire_locked(",
+		"trustix_datapath_inner_gso_record_reassembly_timeout(",
+	} {
+		if !strings.Contains(sweep, want) {
+			t.Fatalf("inner-GSO runtime sweep is missing %q:\n%s", want, sweep)
+		}
+	}
+	progress := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_reassembly_record_progress")
+	for _, want := range []string{
+		"slot->flow_id != frame->flow_id",
+		"slot->epoch != frame->epoch",
+		"slot->stream_last_progress = now",
+	} {
+		if !strings.Contains(progress, want) {
+			t.Fatalf("inner-GSO per-stream progress tracking is missing %q:\n%s", want, progress)
+		}
+	}
+	processFrame := daemonTestSourceFunctionBody(t, source, "trustix_datapath_rx_worker_process_tixt_frame")
+	if !strings.Contains(processFrame, "trustix_datapath_inner_gso_reassembly_record_progress(") {
+		t.Fatalf("successful inner-GSO delivery does not refresh per-stream progress:\n%s", processFrame)
+	}
+	probationClaim := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_probation_record_claim")
+	for _, want := range []string{
+		"TRUSTIX_DATAPATH_INNER_GSO_PROBATION_MIN_CLAIMS",
+		"trustix_datapath_inner_gso_no_progress_ms",
+		"slot->first_claim",
+		"slot->last_claim",
+		"trustix_datapath_inner_gso_record_probation_no_progress(",
+	} {
+		if !strings.Contains(probationClaim, want) {
+			t.Fatalf("inner-GSO continuation probation is missing %q:\n%s", want, probationClaim)
+		}
+	}
+	probationSuccess := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_probation_record_success")
+	for _, want := range []string{
+		"slot->first_claim = 0",
+		"slot->claims_since_success = 0",
+		"slot->last_success = now",
+	} {
+		if !strings.Contains(probationSuccess, want) {
+			t.Fatalf("inner-GSO probation success reset is missing %q:\n%s", want, probationSuccess)
+		}
+	}
+	if !strings.Contains(progress, "trustix_datapath_inner_gso_probation_record_success(") {
+		t.Fatalf("successful inner-GSO delivery does not reset continuation probation:\n%s", progress)
+	}
+	if !strings.Contains(hook, "trustix_datapath_inner_gso_probation_record_claim(") {
+		t.Fatalf("claimed inner-GSO continuations do not feed liveness probation:\n%s", hook)
+	}
+	recordEvent := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_record_runtime_event")
+	for _, want := range []string{
+		"stream_last_progress",
+		"no_progress_trip",
+		"trustix_datapath_inner_gso_no_progress_circuit_trips++",
+	} {
+		if !strings.Contains(recordEvent, want) {
+			t.Fatalf("inner-GSO no-progress circuit is missing %q:\n%s", want, recordEvent)
+		}
+	}
+	if strings.Contains(recordEvent, "stream_last_progress +") {
+		t.Fatalf("one idle incomplete stream must not bypass the timeout-burst threshold:\n%s", recordEvent)
+	}
+	deadline := daemonTestSourceFunctionBody(t, source, "trustix_datapath_inner_gso_reassembly_deadline")
+	if !strings.Contains(deadline, "trustix_datapath_inner_gso_reassembly_timeout_ms") ||
+		strings.Count(source, "trustix_datapath_inner_gso_reassembly_deadline()") < 3 {
+		t.Fatalf("inner-GSO reassembly slots do not consistently use the configurable deadline:\n%s", deadline)
+	}
+	selftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_inner_gso")
+	if !strings.Contains(selftest, "&tail_len, false)") ||
+		!strings.Contains(selftest, "&frame, first_frame_sequence, false)") {
+		t.Fatalf("inner-GSO selftest must not account synthetic timeouts as runtime faults:\n%s", selftest)
 	}
 }
 
@@ -426,6 +676,7 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 	partition := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_hash_tx_queue_for_transport")
 	for _, want := range []string{
 		"mixed % txq_count",
+		"(mixed % subset_count) * 2",
 		"(mixed % subset_count) * 2 + 1",
 	} {
 		if !strings.Contains(partition, want) {
@@ -449,6 +700,7 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 	}
 	queueSelftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_hash_tx_queue")
 	for _, want := range []string{
+		"seen_partitioned_udp != 0x05",
 		"trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(",
 		"trustix_datapath_tx_plaintext_cpu_for_queue(0, &cpu)",
 		"cpu >= nr_cpu_ids",
@@ -689,41 +941,55 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=5248 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=7296 inner_gso_auto_recover=0 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersInnerGSODisabledByDefault(t *testing.T) {
+func TestTrustIXDatapathModuleParametersInnerGSOEnabledByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	if !moduleParameterHasAssignment(got, "enable_features=5248") {
-		t.Fatalf("parameters = %q, did not select resilient outer-GSO framing by default", got)
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
+		t.Fatalf("parameters = %q, did not select negotiated inner-GSO framing by default", got)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersInnerGSOCanBeEnabledExplicitly(t *testing.T) {
+func TestTrustIXDatapathModuleParametersInnerGSOCanBeDisabledExplicitly(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
-	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "0")
 
 	got := TrustIXDatapathModuleParameters("")
-	if !moduleParameterHasAssignment(got, "enable_features=7296") {
-		t.Fatalf("parameters = %q, did not enable explicitly requested inner-GSO feature", got)
+	if !moduleParameterHasAssignment(got, "enable_features=5248") {
+		t.Fatalf("parameters = %q, did not disable the inner-GSO feature", got)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersRawInnerGSOFeatureRequiresExplicitOptIn(t *testing.T) {
+func TestTrustIXDatapathModuleParametersRawFeatureMaskUsesDefaultInnerGSO(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=5248") {
-		t.Fatalf("parameters = %q, allowed a raw feature mask to bypass inner-GSO opt-in", got)
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
+		t.Fatalf("parameters = %q, did not add default inner-GSO to the raw feature mask", got)
+	}
+	if !moduleParameterHasAssignment(got, "inner_gso_auto_recover=0") {
+		t.Fatalf("parameters = %q, did not lock automatic inner-GSO recovery off", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersRawInnerGSOAutoRecoverCannotBypassLatch(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters("inner_gso_auto_recover=1")
+	if !moduleParameterHasAssignment(got, "inner_gso_auto_recover=0") ||
+		moduleParameterHasAssignment(got, "inner_gso_auto_recover=1") {
+		t.Fatalf("parameters = %q, allowed raw automatic recovery to bypass the latched fallback", got)
 	}
 }
 
@@ -732,7 +998,7 @@ func TestTrustIXDatapathModuleParametersPortShardingEnabledByDefault(t *testing.
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=5248") {
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
 		t.Fatalf("parameters = %q, missing default TIX-TCP port-sharding feature", got)
 	}
 }
@@ -741,11 +1007,10 @@ func TestTrustIXDatapathModuleParametersPortShardingCanBeDisabled(t *testing.T) 
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_PORT_SHARDING", "0")
-	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=7296")
-	if !moduleParameterHasAssignment(got, "enable_features=3200") {
-		t.Fatalf("parameters = %q, did not disable TIX-TCP port-sharding feature", got)
+	if !moduleParameterHasAssignment(got, "enable_features=1152") {
+		t.Fatalf("parameters = %q, did not disable TIX-TCP port-sharding and dependent inner-GSO features", got)
 	}
 }
 
@@ -777,7 +1042,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=5248 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=7296 inner_gso_auto_recover=0 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -995,7 +1260,8 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=5248",
+		"enable_features=7296",
+		"inner_gso_auto_recover=0",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -1063,7 +1329,8 @@ func TestTrustIXDatapathModuleParametersForDesiredOpenWrtDedicatedGateAllowsFull
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=5248",
+		"enable_features=7296",
+		"inner_gso_auto_recover=0",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -1096,7 +1363,8 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=5248",
+		"enable_features=7296",
+		"inner_gso_auto_recover=0",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
