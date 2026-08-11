@@ -6155,10 +6155,17 @@ func TestCrossHostProductionGateRequiresDefaultInnerGSOEnvironment(t *testing.T)
 		return cmd.CombinedOutput()
 	}
 	envPath := filepath.Join(caseDir, "daemon-env.txt")
+	output, err := runGate()
+	if err == nil {
+		t.Fatalf("production gate accepted missing inner-GSO daemon environment artifact:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing daemon environment artifact") {
+		t.Fatalf("production gate did not explain missing inner-GSO daemon environment artifact:\n%s", output)
+	}
 	if err := os.WriteFile(envPath, []byte("TRUSTIX_TIX_TCP_INNER_GSO=1\n"), 0o644); err != nil {
 		t.Fatalf("write explicit inner-GSO daemon env: %v", err)
 	}
-	output, err := runGate()
+	output, err = runGate()
 	if err == nil {
 		t.Fatalf("production gate accepted explicitly enabled inner-GSO evidence:\n%s", output)
 	}

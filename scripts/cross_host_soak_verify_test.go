@@ -3667,6 +3667,7 @@ func writeTIXTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provid
 func writeTIXTCPInnerGSOProductionGateArtifacts(t *testing.T, dir string) {
 	t.Helper()
 	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	writeTextFile(t, filepath.Join(dir, "daemon-env.txt"), "TRUSTIX_CAPTURE_FORWARDER_WORKERS=auto\n")
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), true, true)
