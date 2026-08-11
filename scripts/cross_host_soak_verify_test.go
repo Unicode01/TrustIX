@@ -2483,9 +2483,10 @@ func TestCrossHostProductionGateRejectsTIXTCPInnerGSONotNegotiated(t *testing.T)
 	}
 }
 
-func TestCrossHostProductionGateRejectsTIXTCPInnerGSOMissingPerNodeTraffic(t *testing.T) {
+func TestCrossHostProductionGateRejectsTIXTCPInnerGSOMissingPerNodeReliabilityCounters(t *testing.T) {
 	for _, parameter := range []string{
 		"tx_plaintext_inner_gso_packets",
+		"tx_plaintext_inner_gso_metadata_scrubs",
 		"rx_worker_inner_gso_packets",
 	} {
 		t.Run(parameter, func(t *testing.T) {
@@ -3691,6 +3692,7 @@ func tixTCPInnerGSOHealthyModuleOverrides() map[string]string {
 		"tx_plaintext_inner_gso_packets":              "120",
 		"tx_plaintext_inner_gso_segments":             "960",
 		"tx_plaintext_inner_gso_fallbacks":            "0",
+		"tx_plaintext_inner_gso_metadata_scrubs":      "120",
 		"rx_worker_inner_gso_candidates":              "120",
 		"rx_worker_inner_gso_packets":                 "118",
 		"rx_worker_inner_gso_segments":                "944",
