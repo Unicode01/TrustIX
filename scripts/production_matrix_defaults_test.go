@@ -639,8 +639,8 @@ func TestProductionMatrixDefaultsAvoidUnsafeTIXTCPSecureFastPath(t *testing.T) {
 				"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
-				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_full_kmod:4:3600",
-				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_full_kmod:4:3600",
+				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_inner_gso:4:3600",
+				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_inner_gso:4:3600",
 				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"tix_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 				"tix_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
@@ -771,8 +771,8 @@ func TestProductionTransportMatrixSingleHostScopeCannotSelectCrossHostOnlyGates(
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod":               true,
 		"owdeb_full_kmod":         true,
-		"tix_tcp_full_kmod":       true,
-		"owdeb_tix_tcp_full_kmod": true,
+		"tix_tcp_inner_gso":       true,
+		"owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp":             true,
 		"secure_tix_tcp_kernel":   true,
 		"route_gso":               true,
@@ -1117,6 +1117,43 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		if fields[idx] != want {
 			t.Fatalf("field %d = %q, want %q\n%s", idx, fields[idx], want, output)
 		}
+	}
+
+	runTiming := gateRow["run_timing"].([]map[string]any)[0]
+	for _, timing := range []struct {
+		mode       string
+		directions string
+	}{
+		{mode: "bidir", directions: "a2b"},
+		{mode: "bidir", directions: "b2a"},
+	} {
+		runTiming["iperf_mode"] = timing.mode
+		runTiming["iperf_directions"] = timing.directions
+		gatePayload, err = json.Marshal(gateRow)
+		if err != nil {
+			t.Fatalf("marshal %s/%s gate row: %v", timing.mode, timing.directions, err)
+		}
+		if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+			t.Fatalf("write %s/%s gate summary: %v", timing.mode, timing.directions, err)
+		}
+		bidirCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+			"--matrix-summary", slashPath(matrixSummary),
+			"--gate-summary-dir", slashPath(gateSummaryDir),
+			"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+		)
+		bidirCmd.Dir = "."
+		if bidirOutput, err := bidirCmd.CombinedOutput(); err != nil {
+			t.Fatalf("production evidence generator rejected %s/%s timing: %v\n%s", timing.mode, timing.directions, err, bidirOutput)
+		}
+	}
+	runTiming["iperf_mode"] = "forward"
+	runTiming["iperf_directions"] = "both"
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal restored forward/both gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("restore forward/both gate summary: %v", err)
 	}
 
 	originalIperf := gateRow["iperf"]
@@ -2497,8 +2534,8 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		"tc_direct",
 		"full_kmod",
 		"owdeb_full_kmod",
-		"tix_tcp_full_kmod",
-		"owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso",
+		"owdeb_tix_tcp_inner_gso",
 		"secure_kudp",
 		"secure_tix_tcp_kernel",
 		"route_gso",
@@ -2627,8 +2664,8 @@ func TestProductionTransportAuditReportsCurrentRefreshGaps(t *testing.T) {
 		"tc_direct":               true,
 		"full_kmod":               true,
 		"owdeb_full_kmod":         true,
-		"tix_tcp_full_kmod":       true,
-		"owdeb_tix_tcp_full_kmod": true,
+		"tix_tcp_inner_gso":       true,
+		"owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp":             true,
 		"secure_tix_tcp_kernel":   true,
 		"route_gso":               true,
@@ -4535,12 +4572,12 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
-	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-544402d-tix-tcp-copy-csum-production"
+	const defaultInnerGSOProductionArtifact = "docs/trustix-performance-log.md#2026-08-11-zaozhuang-pve-d4734aa-default-inner-gso-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
-		"tix_tcp_full_kmod":       tixTCPFullKmodProductionArtifact,
-		"owdeb_tix_tcp_full_kmod": tixTCPFullKmodProductionArtifact,
+		"tix_tcp_inner_gso":       defaultInnerGSOProductionArtifact,
+		"owdeb_tix_tcp_inner_gso": defaultInnerGSOProductionArtifact,
 		"secure_kudp":             finalProductionArtifact,
 		"secure_tix_tcp_kernel":   finalProductionArtifact,
 		"route_gso":               finalProductionArtifact,
@@ -5241,8 +5278,8 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"tix_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
 		"tix_tcp:secure:performance:kernel_module:kernel:cross_host:secure_tix_tcp_kernel:1.5:3600",
 		"tix_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_full_kmod:4:3600",
-		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_full_kmod:4:3600",
+		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_inner_gso:4:3600",
+		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_inner_gso:4:3600",
 		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
 		if !strings.Contains(defaults, wantCase) {
@@ -5261,20 +5298,17 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 	knownGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
 		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
 		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
 		"tix_tcp_inner_gso": true, "owdeb_tix_tcp_inner_gso": true,
 		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
@@ -6046,6 +6080,97 @@ func TestCrossHostProductionGateRejectsUnsupportedIperfModePair(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "must be forward/both, bidir/a2b, or bidir/b2a") {
 		t.Fatalf("production gate did not report the invalid timing mode:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateInnerGSOReliabilityContract(t *testing.T) {
+	payload, err := os.ReadFile("linux-cross-host-production-gate.sh")
+	if err != nil {
+		t.Fatalf("read production gate: %v", err)
+	}
+	text := string(payload)
+	start := strings.Index(text, `if [[ "$tix_tcp_inner_gso_case_count" -gt 0 ]]; then`)
+	end := strings.Index(text, `if [[ "$tix_tcp_inner_gso_latched_fallback_case_count" -gt 0 ]]; then`)
+	if start < 0 || end <= start {
+		t.Fatalf("production gate inner-GSO block boundaries are missing")
+	}
+	block := text[start:end]
+	for _, want := range []string{
+		`run_gate_case_list tix-tcp-inner-gso`,
+		`--require-datapath-stat tix_tcp.inner_gso=true`,
+		`--require-transport-session-stat stats.extra.tix_tcp_inner_gso_local=1`,
+		`--require-transport-session-stat stats.extra.tix_tcp_inner_gso_peer=1`,
+		`--require-transport-session-stat stats.extra.tix_tcp_inner_gso_negotiated=1`,
+		`--require-module-param-min trustix_datapath.enable_features=7296`,
+		`--require-module-param-max trustix_datapath.inner_gso_auto_recover=0`,
+		`--require-module-param-min trustix_datapath.inner_gso_runtime_ready=1`,
+		`--require-module-param-max trustix_datapath.inner_gso_circuit_trips=0`,
+		`--require-module-param-max trustix_datapath.inner_gso_timeout_circuit_trips=0`,
+		`--require-module-param-max trustix_datapath.inner_gso_no_progress_circuit_trips=0`,
+		`--require-module-param-max trustix_datapath.inner_gso_circuit_recoveries=0`,
+		`--require-module-param-min trustix_datapath.tx_plaintext_inner_gso_packets=1`,
+		`--require-module-param-min trustix_datapath.rx_worker_inner_gso_packets=1`,
+		`--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_fallbacks="${tix_tcp_inner_gso_fallback_budget}"`,
+		`--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_errors=0`,
+		`--require-module-param-min trustix_datapath.tx_plaintext_inner_gso_metadata_scrubs=1`,
+		`--require-module-param-max trustix_datapath.rx_worker_inner_gso_malformed=0`,
+		`--require-module-param-max trustix_datapath.rx_worker_inner_gso_errors=0`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("production gate inner-GSO reliability block missing %q", want)
+		}
+	}
+	if !strings.Contains(text, `require_case_daemon_env_unset "$token" TRUSTIX_TIX_TCP_INNER_GSO`) {
+		t.Fatal("production gate does not prove inner-GSO was selected by default")
+	}
+	for _, want := range []string{
+		`tix_tcp_inner_gso_fallback_budget="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET:-1}"`,
+		`validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET "$tix_tcp_inner_gso_fallback_budget"`,
+		`"tix_tcp_inner_gso_fallback_budget": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("production gate inner-GSO fallback budget contract missing %q", want)
+		}
+	}
+}
+
+func TestCrossHostProductionGateRequiresDefaultInnerGSOEnvironment(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	caseDir := filepath.Join(workdir, "inner-gso")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatalf("create inner-GSO case dir: %v", err)
+	}
+	verifier := filepath.Join(workdir, "verifier.py")
+	if err := os.WriteFile(verifier, []byte("raise SystemExit(0)\n"), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+	runGate := func() ([]byte, error) {
+		cmd := exec.Command(bash, "linux-cross-host-production-gate.sh")
+		cmd.Dir = "."
+		cmd.Env = append(os.Environ(),
+			"TRUSTIX_CROSS_HOST_GATE_VERIFIER="+slashPath(verifier),
+			"TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_CASES=inner="+slashPath(caseDir),
+		)
+		return cmd.CombinedOutput()
+	}
+	envPath := filepath.Join(caseDir, "daemon-env.txt")
+	if err := os.WriteFile(envPath, []byte("TRUSTIX_TIX_TCP_INNER_GSO=1\n"), 0o644); err != nil {
+		t.Fatalf("write explicit inner-GSO daemon env: %v", err)
+	}
+	output, err := runGate()
+	if err == nil {
+		t.Fatalf("production gate accepted explicitly enabled inner-GSO evidence:\n%s", output)
+	}
+	if !strings.Contains(string(output), "explicitly sets TRUSTIX_TIX_TCP_INNER_GSO") ||
+		!strings.Contains(string(output), "must leave it unset") {
+		t.Fatalf("production gate did not explain default inner-GSO requirement:\n%s", output)
+	}
+	if err := os.WriteFile(envPath, []byte("TRUSTIX_CAPTURE_FORWARDER_WORKERS=auto\n"), 0o644); err != nil {
+		t.Fatalf("write default inner-GSO daemon env: %v", err)
+	}
+	if output, err := runGate(); err != nil {
+		t.Fatalf("production gate rejected default inner-GSO environment: %v\n%s", err, output)
 	}
 }
 

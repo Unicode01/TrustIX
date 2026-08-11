@@ -362,7 +362,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		Datapath:        plaintext.Datapath,
 		CryptoPlacement: plaintext.CryptoPlacement,
 		ValidationScope: "cross_host",
-		GateFamily:      "tix_tcp_full_kmod",
+		GateFamily:      "tix_tcp_inner_gso",
 		MinGbps:         "4",
 		MinSeconds:      "3600",
 	})
@@ -373,7 +373,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		Datapath:        plaintext.Datapath,
 		CryptoPlacement: plaintext.CryptoPlacement,
 		ValidationScope: "cross_host",
-		GateFamily:      "owdeb_tix_tcp_full_kmod",
+		GateFamily:      "owdeb_tix_tcp_inner_gso",
 		MinGbps:         "4",
 		MinSeconds:      "3600",
 	})

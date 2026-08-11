@@ -66,16 +66,21 @@ full-kmod traffic pinned to the fenced master's MAC until TTL expiry. The
 `tx_plaintext_direct_xmit_dst_mac_cache_invalidations` module parameter exposes
 that invalidation count for HA and datapath gates.
 The module reports `full_datapath` only when the packet ownership path is
-explicitly enabled and self-tested. The current full-plaintext profile loads
-with `enable_features=5248` (`full_datapath=128`, negotiated inner TCP
-`CHECKSUM_PARTIAL=1024`, and TIX-TCP port sharding `4096`), keeps all datapath
-selftests passing, and sets `rx_worker_inject=1` and `tx_plaintext=1`. Plaintext
-GSO uses resilient outer-GSO framing, where every outer segment contains one
-complete independent TIX frame. Negotiated port sharding maps inner flows onto
-16 outer source ports with independent sequence domains. Inner GSO preservation
-(`2048`) is experimental and requires `TRUSTIX_TIX_TCP_INNER_GSO=1` on each
-participating node. Mixed-version sessions retain the base outer port, full
-inner TCP checksums, and the original segmentation path.
+explicitly enabled and self-tested. The current plaintext full-kmod profile
+loads with `enable_features=7296` (`full_datapath=128`, negotiated inner TCP
+`CHECKSUM_PARTIAL=1024`, inner GSO preservation `2048`, and TIX-TCP port
+sharding `4096`), keeps all datapath selftests passing, and sets
+`inner_gso_auto_recover=0`, `rx_worker_inject=1`, and `tx_plaintext=1`.
+Negotiated port sharding maps inner flows onto 16 outer source ports with
+independent sequence domains. Inner GSO is used only after both peers advertise
+the feature and commit their kernel session state. A frame fault, excessive
+reassembly timeout ratio, or sustained no-progress condition opens the runtime
+circuit; the daemon withdraws the capability, waits for peer acknowledgement
+and a bounded drain, then keeps the same session on resilient outer-GSO
+framing. The circuit is latched until module reload and does not automatically
+re-enable inner GSO. `TRUSTIX_TIX_TCP_INNER_GSO=0` selects the previous
+`enable_features=5248` outer-GSO profile. Mixed-version sessions retain full
+inner TCP checksums and the compatible segmentation path.
 Without those conditions it stays loaded as a control-plane state/hook module
 and marks the requested feature unsafe.
 The module creates one order-4 page pool per possible CPU for reusable
@@ -99,7 +104,7 @@ Build and inspect:
 
 ```sh
 make -C kernel/trustix_datapath
-sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=5248 rx_worker_inject=1 tx_plaintext=1
+sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=7296 inner_gso_auto_recover=0 rx_worker_inject=1 tx_plaintext=1
 cat /sys/module/trustix_datapath/parameters/abi_version
 cat /sys/module/trustix_datapath/parameters/features
 cat /sys/module/trustix_datapath/parameters/selftests

@@ -42,6 +42,6 @@ tix_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline en
 tix_tcp	secure	stable	userspace	userspace	cross_host	userspace	0.5	3600	selected encrypted TIX-TCP userspace compatibility path
 tix_tcp	secure	performance	kernel_module	kernel	cross_host	secure_tix_tcp_kernel	1.5	3600	selected secure TIX-TCP kernel crypto route-GSO path
 tix_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext TIX-TCP compatibility path
-tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	tix_tcp_full_kmod	4	3600	selected plaintext TIX-TCP full-kmod datapath
-tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_tix_tcp_full_kmod	4	3600	selected OpenWrt-Debian plaintext TIX-TCP full-kmod datapath
+tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	tix_tcp_inner_gso	4	3600	selected plaintext TIX-TCP inner-GSO full-kmod datapath
+tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_tix_tcp_inner_gso	4	3600	selected OpenWrt-Debian plaintext TIX-TCP inner-GSO full-kmod datapath
 tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	3600	selected plaintext TIX-TCP route-GSO path

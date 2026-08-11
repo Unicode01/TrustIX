@@ -13,7 +13,7 @@ historical current rows that predate those columns are allowlisted by exact
 artifact and transport key in the audit script. New passing production evidence must be generated
 from production-gate summaries so `scripts/production-evidence-from-gate-summary.py`
 can verify the measured soak reached at least 3600 seconds, the run timing was
-`iperf_mode=forward` with `iperf_directions=both`, boot IDs stayed stable on at
+either two forward directions or one bidirectional run covering both directions, boot IDs stayed stable on at
 least two nodes, bidirectional iperf interval coverage passed, result markers
 were `pass`, both nodes ran the same binary, loaded-module and LAN interface
 state artifacts were present, and kernel log plus pstore artifacts were
@@ -23,9 +23,9 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `544402dd023b7a84de4e4233dc236d1ea489f5ad` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The TIX-TCP full-kmod path now combines reusable outer-GSO page-pool storage, nonlinear RX offset-copy, per-CPU RX GSO page-frag caches, and fused TX payload copy/checksum. |
-| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` at `544402dd023b7a84de4e4233dc236d1ea489f5ad` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` have strict 3600s per-direction evidence. The current TIX-TCP gate exercised fused TX payload copy/checksum, RX offset-copy, and the compatible page-pool/cache implementations with zero covered errors. |
+| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian default inner-GSO are refreshed at `d4734aae320c90b3c4ad274e02c78c5a9191ad92` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` compatibility evidence and default TIX-TCP inner-GSO evidence on `6.12.101+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_inner_gso`, and `tc_direct`. Default inner-GSO combines negotiated capability/readiness, latched same-session outer-GSO fallback, reusable page-pool storage, nonlinear RX offset-copy, per-CPU RX page-frag caches, and fused TX copy/checksum. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` and Debian 13 `6.12.101+deb13-cloud-amd64`; default inner-GSO is validated at `d4734aae320c90b3c4ad274e02c78c5a9191ad92` | `owdeb_full_kmod` retains its compatibility evidence and `owdeb_tix_tcp_inner_gso` has a strict simultaneous-bidirectional 3600s pass. The gate permits at most one safe TX shape fallback per node while requiring all inner/outer GSO errors, malformed frames, circuit trips, and delivery errors to remain zero. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
@@ -6424,3 +6424,48 @@ selftest errors remained zero; pstore was empty and both boot IDs were stable.
 The 6.1 host emitted its existing optional BPF-kfunc module-BTF warning, but the
 full-kmod direct crypto provider does not depend on that registration and the
 secure runner checks passed.
+
+<a id="2026-08-11-zaozhuang-pve-d4734aa-default-inner-gso-production"></a>
+
+### 2026-08-11 Zaozhuang PVE d4734aa default inner-GSO production
+
+Plaintext TIX-TCP full-kmod now selects negotiated inner GSO by default with
+feature mask `7296`; `TRUSTIX_TIX_TCP_INNER_GSO=0` retains the `5248`
+outer-GSO compatibility path. Both peers must publish capability and kernel
+session readiness before use. Runtime faults withdraw the capability, wait for
+the peer ACK and a bounded drain, then latch the existing session onto
+outer-GSO. Automatic inner-GSO recovery remains disabled.
+
+The tested binary was built from
+`d4734aae320c90b3c4ad274e02c78c5a9191ad92`, had SHA256
+`6fd2351e1d2af7522b0f9cc148f2f15df23003a1aa8224c460bac1be2a9e0dfb`,
+and reported Go `1.25.12`. Neither 3600-second run set
+`TRUSTIX_TIX_TCP_INNER_GSO`, so the gate exercised the actual default.
+
+| Matrix | Load | A-to-B received | B-to-A received | Result |
+| --- | ---: | ---: | ---: | --- |
+| Debian 13 `6.12.101` to Debian 13 `6.12.101` | P16 simultaneous bidirectional | 7.407090 Gbps | 7.862629 Gbps | pass |
+| Debian 13 `6.12.101` to OpenWrt 24.10.7 `6.6.141` | P4 simultaneous bidirectional | 4.869170 Gbps | 9.179142 Gbps | pass |
+
+Every required direction contained 3600 one-second intervals with no missing
+or zero interval. Boot IDs remained stable; pstore, kernel journals, dmesg,
+session errors, queue drops, malformed inner-GSO frames, circuit trips, and
+inner/outer GSO errors were clean. During the OpenWrt run, each endpoint also
+completed 500 reads of `/v1/status`, `/v1/datapath`, and `/v1/transports`
+without a lockup or state change.
+
+OpenWrt recorded one safe shape fallback among `69,293,795` inner-GSO attempts.
+That packet continued through outer-GSO as one packet with nine segments;
+inner-GSO errors, outer-GSO errors, and delivery errors stayed zero. The strict
+gate therefore records a budget of at most one such fallback per node per
+3600-second run instead of treating a successful reliability fallback as data
+loss.
+
+A separate 150-second fault run applied 25 ms delay with 5 ms jitter. Both
+nodes tripped the runtime circuit once, completed capability-withdrawal ACKs,
+kept the same transport sessions, stopped inner-GSO traffic, and continued
+through outer-GSO without a zero throughput interval. The v3 production gate
+passed both long runs with gate SHA256
+`7c587c568531d820e3612629ae81ce481deb9c12f29f65b837adc1e2097e69e5`
+and verifier SHA256
+`1bf1a23b16df5f26ffd0ed363692854e0583550a24e2c50281dce1ce88ce1d0a`.

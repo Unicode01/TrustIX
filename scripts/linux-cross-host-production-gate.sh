@@ -28,6 +28,7 @@ full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 tix_tcp_full_kmod_min_pool_size="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE:-16}"
 tix_tcp_full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_SESSIONS:-16}"
 tix_tcp_full_kmod_session_error_budget="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0}"
+tix_tcp_inner_gso_fallback_budget="${TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET:-1}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
 secure_kudp_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET:-64}"
@@ -133,6 +134,18 @@ validate_case_token() {
   [[ "$token" == *=* ]] || die "case must be NAME=PATH, got ${token}"
   [[ -n "${token%%=*}" ]] || die "case must be NAME=PATH, got ${token}"
   [[ -n "${token#*=}" ]] || die "case must be NAME=PATH, got ${token}"
+}
+
+require_case_daemon_env_unset() {
+  local token="$1" key="$2"
+  local case_name="${token%%=*}" case_path="${token#*=}"
+  local env_file="${case_path}/daemon-env.txt" line
+  [[ -f "$env_file" ]] || die "case ${case_name} is missing daemon environment artifact: ${env_file}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "${key}="*) die "case ${case_name} explicitly sets ${key}; default-path evidence must leave it unset" ;;
+    esac
+  done <"$env_file"
 }
 
 validate_case_min_token() {
@@ -489,6 +502,7 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE="$tix_tcp_full_kmod_min_pool_size" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_SESSIONS="$tix_tcp_full_kmod_min_sessions" \
   TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET="$tix_tcp_full_kmod_session_error_budget" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET="$tix_tcp_inner_gso_fallback_budget" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS="$secure_kudp_min_sessions" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS="$secure_kudp_min_crypto_flows" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET="$secure_kudp_direct_error_budget" \
@@ -577,6 +591,7 @@ manifest = {
         "tix_tcp_full_kmod_min_pool_size": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE"],
         "tix_tcp_full_kmod_min_sessions": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_SESSIONS"],
         "tix_tcp_full_kmod_session_error_budget": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET"],
+        "tix_tcp_inner_gso_fallback_budget": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET"],
         "secure_kudp_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS"],
         "secure_kudp_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS"],
         "secure_kudp_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET"],
@@ -724,6 +739,7 @@ main() {
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE "$tix_tcp_full_kmod_min_pool_size"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_SESSIONS "$tix_tcp_full_kmod_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET "$tix_tcp_full_kmod_session_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO_FALLBACK_BUDGET "$tix_tcp_inner_gso_fallback_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
@@ -837,6 +853,7 @@ main() {
   done
   for token in $tix_tcp_inner_gso_cases_raw; do
     validate_case_token "$token"
+    require_case_daemon_env_unset "$token" TRUSTIX_TIX_TCP_INNER_GSO
     append_case_token tix_tcp_inner_gso_cases "$token"
     tix_tcp_inner_gso_case_count=$((tix_tcp_inner_gso_case_count + 1))
   done
@@ -1149,6 +1166,11 @@ main() {
       --require-module-param-min trustix_datapath.rx_worker_inner_gso_candidates=1 \
       --require-module-param-min trustix_datapath.rx_worker_inner_gso_packets=1 \
       --require-module-param-min trustix_datapath.rx_worker_inner_gso_segments=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_inner_gso_fallbacks="${tix_tcp_inner_gso_fallback_budget}" \
+      --require-module-param-max trustix_datapath.tx_plaintext_inner_gso_errors=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_inner_gso_metadata_scrubs=1 \
+      --require-module-param-max trustix_datapath.rx_worker_inner_gso_malformed=0 \
+      --require-module-param-max trustix_datapath.rx_worker_inner_gso_errors=0 \
       --require-module-param-max trustix_datapath.inner_gso_auto_recover=0 \
       --require-module-param-min trustix_datapath.inner_gso_runtime_ready=1 \
       --require-module-param-max trustix_datapath.inner_gso_circuit_trips=0 \

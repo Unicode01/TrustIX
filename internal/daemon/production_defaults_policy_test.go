@@ -20,7 +20,8 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		row := row
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
-			if row.GateFamily == "owdeb_full_kmod" || row.GateFamily == "owdeb_tix_tcp_full_kmod" {
+			if row.GateFamily == "owdeb_full_kmod" || row.GateFamily == "owdeb_tix_tcp_full_kmod" ||
+				row.GateFamily == "owdeb_tix_tcp_inner_gso" {
 				t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
 				t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 			}
@@ -32,7 +33,9 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
 				assertProductionDefaultNoKernelFastPath(t, row, spec)
-			case "full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
+			case "full_kmod", "owdeb_full_kmod",
+				"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+				"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso":
 				if !spec.KernelDatapathFullPlaintext {
 					t.Fatalf("%s should select full-kmod plaintext ownership: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -108,7 +111,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			}
 		})
 	}
-	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_tix_tcp_kernel", "route_gso"} {
+	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso", "tc_direct", "secure_kudp", "secure_tix_tcp_kernel", "route_gso"} {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
@@ -118,7 +121,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing.T) {
 	rows := readProductionTransportDefaultRowsForProvisionTest(t)
 	found := map[string]bool{}
-	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_full_kmod"} {
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_inner_gso"} {
 		gateFamily := gateFamily
 		t.Run(gateFamily, func(t *testing.T) {
 			for _, row := range rows {
@@ -139,7 +142,7 @@ func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing
 			}
 		})
 	}
-	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_full_kmod"} {
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_inner_gso"} {
 		if !found[gateFamily] {
 			t.Fatalf("production defaults missing OpenWrt-Debian full-kmod row for %s", gateFamily)
 		}
@@ -201,7 +204,8 @@ func desiredForProductionDefaultRuntimeTest(row productionTransportDefaultRowFor
 	}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso":
 		desired.KernelModules.CapabilityProfile = config.KernelCapabilityProfileFullPlaintext
 		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
 			RXStage:             config.KernelDatapathRXStageWorker,
@@ -227,7 +231,9 @@ func productionDefaultRuntimeKernelTransportMode(row productionTransportDefaultR
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
+		"tix_tcp_inner_gso", "dd_tix_tcp_inner_gso", "owdeb_tix_tcp_inner_gso",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
 		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",

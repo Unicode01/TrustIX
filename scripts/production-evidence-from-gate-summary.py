@@ -929,16 +929,18 @@ def require_run_timing_for_pass(
                 f"gate summary case {row.get('case')!r} has invalid run_timing item: {item!r}"
             )
         source = str(item.get("source") or "run_timing")
-        for key, want in {
-            "iperf_mode": "forward",
-            "iperf_directions": "both",
-        }.items():
-            got = str(item.get(key) or "")
-            if got != want:
-                raise SystemExit(
-                    f"gate summary case {row.get('case')!r} {source} {key}={got!r}, "
-                    f"want {want!r}"
-                )
+        iperf_mode = str(item.get("iperf_mode") or "")
+        iperf_directions = str(item.get("iperf_directions") or "")
+        if (iperf_mode, iperf_directions) not in {
+            ("forward", "both"),
+            ("bidir", "a2b"),
+            ("bidir", "b2a"),
+        }:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} timing "
+                f"{iperf_mode!r}/{iperf_directions!r} must be forward/both, "
+                "bidir/a2b, or bidir/b2a"
+            )
         case = str(row.get("case") or "")
         start_epoch = numeric_field(item, "start_epoch", source, case=case)
         end_epoch = numeric_field(item, "end_epoch", source, case=case)
