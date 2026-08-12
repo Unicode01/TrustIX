@@ -81,6 +81,7 @@ health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
 iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600}"
 iperf_parallel_explicit="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}"
 iperf_parallel="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}"
+iperf_tcp_buffer_bytes="${TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES:-0}"
 transport_mtu="${TRUSTIX_CROSS_HOST_MTU:-1500}"
 iptunnel_iperf_parallel="${TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL:-4}"
 iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-}"
@@ -285,10 +286,30 @@ validate_transport_tuning_config() {
   case "$transport_mtu" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_MTU must be an integer" ;; esac
   [[ "$transport_mtu" -ge 576 && "$transport_mtu" -le 65535 ]] ||
     die "TRUSTIX_CROSS_HOST_MTU must be in 576..65535"
+  [[ "$iperf_tcp_buffer_bytes" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    die "TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES must be a non-negative integer"
+  [[ "$iperf_tcp_buffer_bytes" -le 2147483647 ]] ||
+    die "TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES must be in 0..2147483647"
   case "$tix_tcp_inner_gso" in
     ""|true|false|1|0|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_CROSS_HOST_TIX_TCP_INNER_GSO must be boolean" ;;
   esac
+}
+
+write_iperf_tcp_buffer_contract() {
+  local enabled=0
+  [[ "$iperf_tcp_buffer_bytes" -gt 0 ]] && enabled=1
+  cat >"$workdir/iperf-tcp-buffer-config.txt" <<EOF
+format=trustix-cross-host-iperf-tcp-buffer-v1
+requested_bytes=${iperf_tcp_buffer_bytes}
+enabled=${enabled}
+scope=temporary-host-network-namespace
+host_namespace_a=${host_ns_a}
+host_namespace_b=${host_ns_b}
+socket_window=autotune
+settings=net.ipv4.tcp_rmem[2],net.ipv4.tcp_wmem[2]
+read_only_settings=net.core.rmem_max,net.core.wmem_max
+EOF
 }
 
 netem_qdisc_args() {
@@ -1497,10 +1518,11 @@ check_local_inputs() {
 
 check_node_prereqs() {
   local node="$1"
-  local trustixd trustixctl netem_required=0
+  local trustixd trustixctl netem_required=0 tcp_buffer_required=0
   trustixd="$(node_bin "$node" trustixd)"
   trustixctl="$(node_bin "$node" trustixctl)"
   netem_enabled && netem_required=1
+  [[ "$iperf_tcp_buffer_bytes" -gt 0 ]] && tcp_buffer_required=1
   run_node "$node" "set -Eeuo pipefail
 missing=0
 required_commands='ip iperf3 curl'
@@ -1509,6 +1531,9 @@ if [ ${netem_required} = 1 ]; then
 fi
 if [ ${netem_required} = 1 ] && [ $(remote_quote "$netem_placement") = ingress ]; then
   required_commands=\"\${required_commands} ethtool modprobe rmmod\"
+fi
+if [ ${tcp_buffer_required} = 1 ]; then
+  required_commands=\"\${required_commands} sysctl\"
 fi
 if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
   required_commands=\"\${required_commands} systemctl systemd-run\"
@@ -1528,6 +1553,78 @@ if [[ ! -x $(remote_quote "$trustixctl") ]]; then
   missing=1
 fi
 [[ \"\$missing\" -eq 0 ]]
+"
+}
+
+configure_iperf_tcp_buffer_node() {
+  local node="$1"
+  local dir host_ns
+  dir="$(remote_dir "$node")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+  run_node "$node" "set -Eeuo pipefail
+dir=$(remote_quote "$dir")
+host_ns=$(remote_quote "$host_ns")
+requested=$(remote_quote "$iperf_tcp_buffer_bytes")
+out=\"\${dir}/iperf-tcp-buffer-state.txt\"
+{
+  printf 'format=trustix-cross-host-iperf-tcp-buffer-state-v1\\n'
+  printf 'requested_bytes=%s\\n' \"\$requested\"
+  printf 'scope=temporary-host-network-namespace\\n'
+  printf 'host_namespace=%s\\n' \"\$host_ns\"
+  if [ \"\$requested\" -eq 0 ]; then
+    printf 'enabled=0\\nstatus=unchanged\\n'
+    exit 0
+  fi
+
+  printf 'enabled=1\\n'
+  ip_cmd=\$(command -v ip)
+  sysctl_cmd=\$(command -v sysctl)
+  read_ns_sysctl() {
+    \"\$ip_cmd\" netns exec \"\$host_ns\" \"\$sysctl_cmd\" -n \"\$1\"
+  }
+  write_ns_sysctl() {
+    \"\$ip_cmd\" netns exec \"\$host_ns\" \"\$sysctl_cmd\" -q -w \"\$1=\$2\"
+  }
+
+  before_core_rmem=\$(read_ns_sysctl net.core.rmem_max)
+  before_core_wmem=\$(read_ns_sysctl net.core.wmem_max)
+  before_tcp_rmem=\$(read_ns_sysctl net.ipv4.tcp_rmem)
+  before_tcp_wmem=\$(read_ns_sysctl net.ipv4.tcp_wmem)
+  printf 'before_net_core_rmem_max=%s\\n' \"\$before_core_rmem\"
+  printf 'before_net_core_wmem_max=%s\\n' \"\$before_core_wmem\"
+  printf 'before_net_ipv4_tcp_rmem=%s\\n' \"\$before_tcp_rmem\"
+  printf 'before_net_ipv4_tcp_wmem=%s\\n' \"\$before_tcp_wmem\"
+
+  set -- \$before_tcp_rmem
+  [ \"\$#\" -eq 3 ]
+  tcp_rmem_min=\$1
+  tcp_rmem_default=\$2
+  set -- \$before_tcp_wmem
+  [ \"\$#\" -eq 3 ]
+  tcp_wmem_min=\$1
+  tcp_wmem_default=\$2
+  [ \"\$requested\" -ge \"\$tcp_rmem_default\" ]
+  [ \"\$requested\" -ge \"\$tcp_wmem_default\" ]
+
+  write_ns_sysctl net.ipv4.tcp_rmem \"\$tcp_rmem_min \$tcp_rmem_default \$requested\"
+  write_ns_sysctl net.ipv4.tcp_wmem \"\$tcp_wmem_min \$tcp_wmem_default \$requested\"
+
+  actual_core_rmem=\$(read_ns_sysctl net.core.rmem_max)
+  actual_core_wmem=\$(read_ns_sysctl net.core.wmem_max)
+  actual_tcp_rmem=\$(read_ns_sysctl net.ipv4.tcp_rmem)
+  actual_tcp_wmem=\$(read_ns_sysctl net.ipv4.tcp_wmem)
+  printf 'actual_net_core_rmem_max=%s\\n' \"\$actual_core_rmem\"
+  printf 'actual_net_core_wmem_max=%s\\n' \"\$actual_core_wmem\"
+  printf 'actual_net_ipv4_tcp_rmem=%s\\n' \"\$actual_tcp_rmem\"
+  printf 'actual_net_ipv4_tcp_wmem=%s\\n' \"\$actual_tcp_wmem\"
+  [ \"\$actual_core_rmem\" = \"\$before_core_rmem\" ]
+  [ \"\$actual_core_wmem\" = \"\$before_core_wmem\" ]
+  set -- \$actual_tcp_rmem
+  [ \"\$#\" -eq 3 ] && [ \"\$3\" = \"\$requested\" ]
+  set -- \$actual_tcp_wmem
+  [ \"\$#\" -eq 3 ] && [ \"\$3\" = \"\$requested\" ]
+  printf 'status=applied\\n'
+} >\"\$out\"
 "
 }
 
@@ -4248,6 +4345,7 @@ main() {
     daemon_env >"$workdir/daemon-env.txt"
     write_pinned_mixed_contract
     write_netem_contract
+    write_iperf_tcp_buffer_contract
     printf 'dry_run_config\n' >"$workdir/${case_name}.result"
     log "dry-run-config result=${workdir}"
     return
@@ -4277,10 +4375,13 @@ main() {
   log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
   daemon_env >"$workdir/daemon-env.txt"
   write_netem_contract
+  write_iperf_tcp_buffer_contract
   trap cleanup_all EXIT
   mark_kernel_log_start
   prepare_node_topology a
   prepare_node_topology b
+  configure_iperf_tcp_buffer_node a
+  configure_iperf_tcp_buffer_node b
   collect_boot_id a before
   collect_boot_id b before
   generate_certs

@@ -16,8 +16,42 @@ func crossHostNetemDryRunEnv(workdir string) []string {
 		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
 		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
 		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES=0",
 		"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
 	)
+}
+
+func TestCrossHostSoakRunnerIperfTCPBufferDryRunContract(t *testing.T) {
+	bash := requireGNUBash4(t)
+	workdir := filepath.Join(t.TempDir(), "iperf-tcp-buffer")
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(crossHostNetemDryRunEnv(workdir),
+		"TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES=268435456",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("iperf TCP buffer dry-run failed: %v\n%s", err, out)
+	}
+	payload, err := os.ReadFile(filepath.Join(workdir, "iperf-tcp-buffer-config.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"format=trustix-cross-host-iperf-tcp-buffer-v1\n",
+		"requested_bytes=268435456\n",
+		"enabled=1\n",
+		"scope=temporary-host-network-namespace\n",
+		"host_namespace_a=tix-host-a\n",
+		"host_namespace_b=tix-host-b\n",
+		"socket_window=autotune\n",
+		"settings=net.ipv4.tcp_rmem[2],net.ipv4.tcp_wmem[2]\n",
+		"read_only_settings=net.core.rmem_max,net.core.wmem_max\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("iperf TCP buffer contract missing %q:\n%s", want, text)
+		}
+	}
 }
 
 func TestCrossHostSoakRunnerNetemDryRunContract(t *testing.T) {
@@ -93,6 +127,9 @@ func TestCrossHostSoakRunnerRejectsInvalidNetemConfig(t *testing.T) {
 		{"invalid-mtu", "TRUSTIX_CROSS_HOST_MTU=jumbo", "must be an integer"},
 		{"small-mtu", "TRUSTIX_CROSS_HOST_MTU=575", "must be in 576..65535"},
 		{"large-mtu", "TRUSTIX_CROSS_HOST_MTU=65536", "must be in 576..65535"},
+		{"negative-iperf-tcp-buffer", "TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES=-1", "must be a non-negative integer"},
+		{"fractional-iperf-tcp-buffer", "TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES=1.5", "must be a non-negative integer"},
+		{"large-iperf-tcp-buffer", "TRUSTIX_CROSS_HOST_IPERF_TCP_BUFFER_BYTES=2147483648", "must be in 0..2147483647"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,6 +144,149 @@ func TestCrossHostSoakRunnerRejectsInvalidNetemConfig(t *testing.T) {
 				t.Fatalf("invalid netem error missing %q:\n%s", tt.want, out)
 			}
 		})
+	}
+}
+
+func TestCrossHostSoakRunnerScopesIperfTCPBufferToHostNetNS(t *testing.T) {
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeIP := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >>"$TRUSTIX_FAKE_IP_LOG"
+[ "${1:-}" = netns ] && [ "${2:-}" = exec ] && [ "${3:-}" = tix-host-a ]
+namespace=$3
+shift 3
+TRUSTIX_FAKE_SYSCTL_NETNS="$namespace" "$@"
+`
+	fakeSysctl := `#!/bin/sh
+set -eu
+[ "${TRUSTIX_FAKE_SYSCTL_NETNS:-}" = tix-host-a ] || {
+  echo 'sysctl escaped the temporary host namespace' >&2
+  exit 97
+}
+printf '%s\n' "$*" >>"$TRUSTIX_FAKE_SYSCTL_LOG"
+state=$TRUSTIX_FAKE_SYSCTL_STATE
+if [ "${1:-}" = -n ]; then
+  applied=0
+  [ -f "$state" ] && applied=1
+  case "${2:-}" in
+    net.core.rmem_max|net.core.wmem_max)
+      echo 212992
+      ;;
+    net.ipv4.tcp_rmem)
+      [ "$applied" -eq 1 ] && echo '4096 131072 268435456' || echo '4096 131072 6291456'
+      ;;
+    net.ipv4.tcp_wmem)
+      [ "$applied" -eq 1 ] && echo '4096 16384 268435456' || echo '4096 16384 4194304'
+      ;;
+    *) exit 2 ;;
+  esac
+  exit 0
+fi
+if [ "${1:-}" = -q ] && [ "${2:-}" = -w ]; then
+  case "${3:-}" in
+    net.ipv4.tcp_rmem='4096 131072 268435456'|net.ipv4.tcp_wmem='4096 16384 268435456')
+      : >"$state"
+      exit 0
+      ;;
+  esac
+fi
+exit 2
+`
+	for name, source := range map[string]string{"ip": fakeIP, "sysctl": fakeSysctl} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte(source), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner, err := filepath.Abs("linux-cross-host-soak-runner.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(root, "remote")
+	code := `
+set -Eeuo pipefail
+source "$RUNNER"
+node_a=local
+remote_a="$REMOTE"
+host_ns_a=tix-host-a
+iperf_tcp_buffer_bytes=268435456
+mkdir -p "$remote_a"
+configure_iperf_tcp_buffer_node a
+grep -Fqx 'requested_bytes=268435456' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'scope=temporary-host-network-namespace' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'actual_net_core_rmem_max=212992' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'actual_net_ipv4_tcp_rmem=4096 131072 268435456' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'actual_net_ipv4_tcp_wmem=4096 16384 268435456' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'status=applied' "$remote_a/iperf-tcp-buffer-state.txt"
+test "$(wc -l <"$TRUSTIX_FAKE_IP_LOG")" = 10
+test "$(sed -n '/^netns exec tix-host-a /!p' "$TRUSTIX_FAKE_IP_LOG" | wc -l)" = 0
+`
+	cmd := exec.Command(bash, "-c", code)
+	cmd.Dir = "."
+	cmd.Env = append(crossHostNetemDryRunEnv(filepath.Join(root, "dry-run")),
+		"RUNNER="+runner,
+		"REMOTE="+remote,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TRUSTIX_FAKE_IP_LOG="+filepath.Join(root, "ip.log"),
+		"TRUSTIX_FAKE_SYSCTL_LOG="+filepath.Join(root, "sysctl.log"),
+		"TRUSTIX_FAKE_SYSCTL_STATE="+filepath.Join(root, "sysctl.state"),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("iperf TCP buffer namespace scope contract failed: %v\n%s", err, out)
+	}
+}
+
+func TestCrossHostSoakRunnerLeavesIperfTCPBufferUntouchedAtZero(t *testing.T) {
+	bash := requireGNUBash4(t)
+	runner, err := filepath.Abs("linux-cross-host-soak-runner.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ip", "sysctl"} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'unexpected "+name+" call' >&2\nexit 97\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remote := filepath.Join(root, "remote")
+	code := `
+set -Eeuo pipefail
+source "$RUNNER"
+node_a=local
+remote_a="$REMOTE"
+host_ns_a=tix-host-a
+iperf_tcp_buffer_bytes=0
+mkdir -p "$remote_a"
+configure_iperf_tcp_buffer_node a
+grep -Fqx 'requested_bytes=0' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'enabled=0' "$remote_a/iperf-tcp-buffer-state.txt"
+grep -Fqx 'status=unchanged' "$remote_a/iperf-tcp-buffer-state.txt"
+`
+	cmd := exec.Command(bash, "-c", code)
+	cmd.Dir = "."
+	cmd.Env = append(crossHostNetemDryRunEnv(filepath.Join(root, "dry-run")),
+		"RUNNER="+runner,
+		"REMOTE="+remote,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("zero iperf TCP buffer unexpectedly required sysctl or ip: %v\n%s", err, out)
 	}
 }
 

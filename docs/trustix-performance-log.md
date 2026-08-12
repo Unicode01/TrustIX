@@ -6526,3 +6526,60 @@ RX-worker allocation/delivery/xmit errors, session errors, and selftest
 failures were all zero. Boot IDs remained stable, pstore stayed mounted and
 empty, and kernel journals contained no panic, Oops, watchdog, or lockup.
 Teardown left no TrustIX process, iperf process, or `trustix_*` module loaded.
+
+<a id="2026-08-12-zaozhuang-pve-50ms-wan-simulation-correction"></a>
+
+### 2026-08-12 Zaozhuang PVE 50 ms WAN simulation correction
+
+The first WAN simulation was not a valid TrustIX throughput ceiling. It mixed
+delay and random loss on both endpoints, included a constrained management
+path in earlier attempts, and left Debian TCP autotuning capped at 4-6 MiB.
+At roughly 26 Gbps and 50 ms RTT, the aggregate bandwidth-delay product is
+about 162.5 MB (155 MiB). The old setup therefore measured the application
+TCP window and congestion response rather than the TrustIX datapath.
+
+The corrected run used disposable Debian 13 VM1000 and VM1001 on the same
+dedicated `vmbr3` data bridge. Each guest had 8 vCPUs, 8 GiB RAM, an
+eight-queue virtio data NIC, and kernel `6.12.100+deb13-cloud-amd64`. Both
+egress data interfaces used a fixed 25 ms netem delay, producing measured RTT
+`50.380 ms`, with zero configured random loss. Management interfaces were not
+shaped. TCP remained on autotune. For the bare TCP baseline,
+`net.ipv4.tcp_rmem[2]` and `net.ipv4.tcp_wmem[2]` were raised to 256 MiB
+temporarily in the disposable guests' initial network namespaces and restored
+immediately after the run. For the TrustIX runs, the same maxima were changed
+only inside each temporary `tix-host-*` network namespace; the runner recorded
+the requested and actual values, while the guests' initial namespaces retained
+their 4-6 MiB defaults.
+
+The P16 sequential-direction results were:
+
+| Path | A-to-B received | B-to-A received | Bare retention |
+| --- | ---: | ---: | ---: |
+| Bare TCP | 25.968832 Gbps | 25.972908 Gbps | 100% |
+| Default TrustIX inner GSO | 24.880105 Gbps | 25.182468 Gbps | 95.81% / 96.96% |
+
+Each TrustIX direction contained all 60 one-second intervals with no missing
+or zero interval. The two netem qdiscs processed 264,561,768 packets with zero
+drops. Both nodes reported `features=safe_features=7296`, `unsafe_features=0`,
+`selftest_failures=0`, and `inner_gso_runtime_ready=Y`. Inner/outer GSO errors
+and fallbacks, runtime faults, circuit trips, queue drops, session errors, and
+kernel errors were zero. Session dials remained exactly 16 in every in-run and
+final transport snapshot. Boot IDs were stable and pstore was mounted and
+empty.
+
+A separate resilience run placed the complete 50 ms delay and `0.001%`
+requested random loss on node A egress only. Netem recorded 48 drops among
+127,512,050 packets. TrustIX received 24.247775 Gbps A-to-B and 25.923594 Gbps
+B-to-A. Both directions again contained 60 complete nonzero intervals;
+session dials remained 16, and session, inner-GSO, fallback, circuit, and
+kernel error counters remained zero. Random-loss throughput is a continuity
+and fallback result, not a throughput ceiling, because TCP congestion control
+intentionally reacts to each loss event.
+
+The tested daemon was built from
+`2bbfeb5225720ceb5ee619e4e18a6ae0defd2c79`, SHA256
+`ecd6bf8830dea4057f581a37daa8a10b959bb4f545587b83419b7af0cce95523`.
+The datapath module SHA256 was
+`68da2a14a392e49b1e412279a837f227ad9b0551a03c5039aefa40f213035af5`.
+These 60-second runs correct the WAN throughput methodology and complement,
+but do not replace, the preceding 3600-second same-bridge production soak.
