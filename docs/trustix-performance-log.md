@@ -23,8 +23,8 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian default inner-GSO are refreshed at `d4734aae320c90b3c4ad274e02c78c5a9191ad92` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` compatibility evidence and default TIX-TCP inner-GSO evidence on `6.12.101+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_inner_gso`, and `tc_direct`. Default inner-GSO combines negotiated capability/readiness, latched same-session outer-GSO fallback, reusable page-pool storage, nonlinear RX offset-copy, per-CPU RX page-frag caches, and fused TX copy/checksum. |
+| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian default inner-GSO is refreshed at `06da822e80b2548be39c9f856815d131e9bd65dd`, while OpenWrt-Debian remains at `d4734aae320c90b3c4ad274e02c78c5a9191ad92` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` compatibility evidence and current-head same-bridge default TIX-TCP inner-GSO evidence on `6.12.101+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_inner_gso`, and `tc_direct`. Default inner-GSO combines negotiated capability/readiness, latched same-session outer-GSO fallback, reusable page-pool storage, nonlinear RX offset-copy, per-CPU RX page-frag caches, and fused TX copy/checksum. The same-bridge gate passed a strict 20 Gbps floor at 23.697696 and 24.651472 Gbps. |
 | OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` and Debian 13 `6.12.101+deb13-cloud-amd64`; default inner-GSO is validated at `d4734aae320c90b3c4ad274e02c78c5a9191ad92` | `owdeb_full_kmod` retains its compatibility evidence and `owdeb_tix_tcp_inner_gso` has a strict simultaneous-bidirectional 3600s pass. The gate permits at most one safe TX shape fallback per node while requiring all inner/outer GSO errors, malformed frames, circuit trips, and delivery errors to remain zero. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
@@ -6444,7 +6444,7 @@ and reported Go `1.25.12`. Neither 3600-second run set
 
 | Matrix | Load | A-to-B received | B-to-A received | Result |
 | --- | ---: | ---: | ---: | --- |
-| Debian 13 `6.12.101` to Debian 13 `6.12.101` | P16 simultaneous bidirectional | 7.407090 Gbps | 7.862629 Gbps | pass |
+| Debian 13 `6.12.101` to Debian 13 `6.12.101` | P16 simultaneous bidirectional through `vmbr3-veth-vmbr4` | 7.407090 Gbps | 7.862629 Gbps | pass |
 | Debian 13 `6.12.101` to OpenWrt 24.10.7 `6.6.141` | P4 simultaneous bidirectional | 4.869170 Gbps | 9.179142 Gbps | pass |
 
 Every required direction contained 3600 one-second intervals with no missing
@@ -6453,6 +6453,11 @@ session errors, queue drops, malformed inner-GSO frames, circuit trips, and
 inner/outer GSO errors were clean. During the OpenWrt run, each endpoint also
 completed 500 reads of `/v1/status`, `/v1/datapath`, and `/v1/transports`
 without a lockup or state change.
+
+The Debian guests in this run were intentionally placed on opposite bridges
+joined by a host veth pair. That result remains useful cross-bridge stress and
+stability evidence, but it is not an inner-GSO throughput ceiling. The
+2026-08-12 same-bridge rerun below supersedes it for current Debian throughput.
 
 OpenWrt recorded one safe shape fallback among `69,293,795` inner-GSO attempts.
 That packet continued through outer-GSO as one packet with nine segments;
@@ -6469,3 +6474,55 @@ passed both long runs with gate SHA256
 `7c587c568531d820e3612629ae81ce481deb9c12f29f65b837adc1e2097e69e5`
 and verifier SHA256
 `1bf1a23b16df5f26ffd0ed363692854e0583550a24e2c50281dce1ce88ce1d0a`.
+
+<a id="2026-08-12-zaozhuang-pve-06da822-same-bridge-inner-gso-production"></a>
+
+### 2026-08-12 Zaozhuang PVE 06da822 same-bridge inner-GSO production
+
+The Debian topology was rebuilt to isolate the cross-bridge cost. Disposable
+VM1000 and VM1001 each used 8 vCPU, 8 GiB RAM, an eight-queue virtio underlay,
+Debian 13 kernel `6.12.101+deb13-cloud-amd64`, and an underlay NIC attached
+directly to the same `vmbr3`. No host veth interconnect or netem qdisc was in
+the traffic path. The daemon was built from
+`06da822e80b2548be39c9f856815d131e9bd65dd` with Go `1.25.12`; both nodes used
+binary SHA256
+`c099cfcb483d13c77eabfc731a1a48ab116795ad6674c5b1ac89b1ebbb4fe61c`.
+The matching `trustix_datapath.ko` SHA256 was
+`7cdda9ad0ada83c1cc0282673822c7868acc889b919ac36cece52cf4fde03a54`,
+and its vermagic matched the running kernel exactly.
+
+Short diagnostics separated topology cost from the TrustIX path:
+
+| Path and load | A-to-B received | B-to-A received | Combined |
+| --- | ---: | ---: | ---: |
+| Bare TCP P4, sequential | 18.6021 Gbps | 15.2909 Gbps | not simultaneous |
+| Bare TCP P4, simultaneous bidirectional | 13.8916 Gbps | 12.5871 Gbps | 26.4787 Gbps |
+| Bare TCP P16, simultaneous bidirectional | 12.4137 Gbps | 11.2704 Gbps | 23.6841 Gbps |
+| Default inner-GSO P4, sequential | 27.792839 Gbps | 27.528790 Gbps | not simultaneous |
+| Default inner-GSO P4, simultaneous bidirectional | 12.794974 Gbps | 14.923464 Gbps | 27.718438 Gbps |
+| Default inner-GSO P16, simultaneous bidirectional | 12.345510 Gbps | 12.373574 Gbps | 24.719084 Gbps |
+| Prior cross-bridge inner-GSO P16, simultaneous bidirectional | 7.407090 Gbps | 7.862629 Gbps | 15.269719 Gbps |
+
+The like-for-like P16 aggregate increased by `61.9%` after removing the host
+veth bridge interconnect. Sequential P4 also returned to the previously
+observed 28 Gbps class. The current host load did not reproduce the historical
+34.500325 Gbps simultaneous-bidirectional peak, so simultaneous figures remain
+placement-sensitive diagnostics rather than a production floor.
+
+The promoted gate used the default inner-GSO selection without setting
+`TRUSTIX_TIX_TCP_INNER_GSO`, four iperf streams, 16 warmed transport sessions,
+and two sequential 3600-second directions. A-to-B received `23.697696 Gbps`
+and B-to-A received `24.651472 Gbps`; the lowest one-second intervals were
+`15.778696 Gbps` and `16.416948 Gbps`. Both directions contained all 3600
+required intervals with no missing or zero interval, and the strict 20 Gbps
+gate reported `status=pass`.
+
+Both nodes reported feature mask `7296`, `inner_gso_runtime_ready=Y`, and
+`inner_gso_auto_recover=N`. Stable shard TX queues, port sharding, inner GSO,
+and inner `CHECKSUM_PARTIAL` were all exercised; the nodes transmitted
+7,347,268,779 and 7,641,743,081 inner-GSO segments. Inner/outer GSO errors,
+fallbacks, malformed packets, circuit trips and recoveries, queue drops,
+RX-worker allocation/delivery/xmit errors, session errors, and selftest
+failures were all zero. Boot IDs remained stable, pstore stayed mounted and
+empty, and kernel journals contained no panic, Oops, watchdog, or lockup.
+Teardown left no TrustIX process, iperf process, or `trustix_*` module loaded.

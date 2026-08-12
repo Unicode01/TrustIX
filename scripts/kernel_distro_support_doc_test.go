@@ -14,9 +14,13 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 	source := string(payload)
 	for _, want := range []string{
 		"later 3600s manifest-backed rechecks now provide the",
-		"2026-07-08, 2026-07-29, and 2026-07-30",
-		"current TIX-TCP gate ran on\n2026-07-30",
-		"`544402dd023b7a84de4e4233dc236d1ea489f5ad`",
+		"2026-07-30, 2026-08-11, and 2026-08-12",
+		"current default inner-GSO\ngate ran on 2026-08-11",
+		"`d4734aae320c90b3c4ad274e02c78c5a9191ad92`",
+		"`06da822e80b2548be39c9f856815d131e9bd65dd`",
+		"23.697696",
+		"24.651472 Gbps",
+		"crossed a host veth between two bridges",
 		"`8c2eebccbcf031f0133c8dbf192d826526c5187c`",
 		"full-kmod modules loaded on both nodes",
 		"OpenWrt-Debian full-kmod plaintext",

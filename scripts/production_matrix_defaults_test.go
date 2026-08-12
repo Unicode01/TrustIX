@@ -4573,10 +4573,11 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
 	const defaultInnerGSOProductionArtifact = "docs/trustix-performance-log.md#2026-08-11-zaozhuang-pve-d4734aa-default-inner-gso-production"
+	const sameBridgeInnerGSOProductionArtifact = "docs/trustix-performance-log.md#2026-08-12-zaozhuang-pve-06da822-same-bridge-inner-gso-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
-		"tix_tcp_inner_gso":       defaultInnerGSOProductionArtifact,
+		"tix_tcp_inner_gso":       sameBridgeInnerGSOProductionArtifact,
 		"owdeb_tix_tcp_inner_gso": defaultInnerGSOProductionArtifact,
 		"secure_kudp":             finalProductionArtifact,
 		"secure_tix_tcp_kernel":   finalProductionArtifact,

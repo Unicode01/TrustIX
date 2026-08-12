@@ -50,7 +50,7 @@ now install for kernel module builds when dependency installation is enabled.
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
 2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, 2026-06-25, 2026-06-26,
 2026-06-27, 2026-07-02, 2026-07-03, 2026-07-04, 2026-07-05, 2026-07-07,
-2026-07-08, 2026-07-29, and 2026-07-30 against current source and selected
+2026-07-08, 2026-07-29, 2026-07-30, 2026-08-11, and 2026-08-12 against current source and selected
 production transport defaults. They covered Debian 13
 `6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, Debian 13
@@ -62,12 +62,13 @@ guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed SDK module builds and fresh 3600s
-OpenWrt-to-Debian full-kmod production gates. Its current TIX-TCP gate ran on
-2026-07-30 against Debian `6.12.96+deb13-cloud-amd64` at commit
-`544402dd023b7a84de4e4233dc236d1ea489f5ad`. It covered fused TX payload
-copy/checksum, nonlinear RX offset-copy, per-CPU RX GSO page-frag caches, and
-reusable outer-GSO TX page-pool storage with full-kmod modules loaded on both nodes
-and clean pstore/kernel log artifacts. Earlier 2026-07-30 page-pool/cache,
+OpenWrt-to-Debian full-kmod production gates. Its current default inner-GSO
+gate ran on 2026-08-11 against Debian `6.12.101+deb13-cloud-amd64` at commit
+`d4734aae320c90b3c4ad274e02c78c5a9191ad92`. It covered negotiated inner GSO,
+stable port-shard TX queues, fused TX payload copy/checksum, nonlinear RX
+offset-copy, per-CPU RX GSO page-frag caches, and reusable outer-GSO TX
+page-pool storage with full-kmod modules loaded on both nodes and clean
+pstore/kernel log artifacts. Earlier 2026-07-30 page-pool/cache,
 2026-07-29,
 2026-07-08, 2026-07-05,
 2026-07-03, 2026-06-27, and 2026-06-25 gates remain historical evidence.
@@ -78,6 +79,17 @@ x86_64 SDK modules also built in forced full mode, but the official runtime
 image used APK package feeds, did not expose `/sys/kernel/btf/vmlinux`, and
 route-GSO, secure-kUDP route-GSO, plus secure TIX-TCP kernel crypto
 failed closed with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`.
+
+A 2026-08-12 current-head Debian-to-Debian refresh used two 8-vCPU Debian 13
+guests with kernel `6.12.101+deb13-cloud-amd64` and both underlay NICs attached
+directly to the same PVE bridge. Commit
+`06da822e80b2548be39c9f856815d131e9bd65dd` passed the default inner-GSO
+production gate at `23.697696` and `24.651472 Gbps` for 3600 seconds per
+direction against a strict 20 Gbps floor. Boot IDs stayed stable, pstore and
+kernel logs were clean, and all covered session, inner/outer GSO, circuit,
+queue, RX-worker, transmit, and selftest error counters were zero. The earlier
+`7.407090/7.862629 Gbps` Debian result crossed a host veth between two bridges;
+it remains stability evidence but must not be treated as the datapath ceiling.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
