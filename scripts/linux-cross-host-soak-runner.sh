@@ -114,6 +114,8 @@ netem_jitter_ms="${TRUSTIX_CROSS_HOST_NETEM_JITTER_MS:-0}"
 netem_reorder_pct="${TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT:-0}"
 netem_duplicate_pct="${TRUSTIX_CROSS_HOST_NETEM_DUPLICATE_PCT:-0}"
 netem_corrupt_pct="${TRUSTIX_CROSS_HOST_NETEM_CORRUPT_PCT:-0}"
+netem_rate_mbit="${TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT:-0}"
+netem_limit_packets_explicit="${TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS+x}"
 netem_limit_packets="${TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS:-262144}"
 netem_disable_gro="${TRUSTIX_CROSS_HOST_NETEM_DISABLE_GRO:-1}"
 netem_active_seconds="${TRUSTIX_CROSS_HOST_NETEM_ACTIVE_SECONDS:-0}"
@@ -191,7 +193,8 @@ netem_enabled() {
     [[ "$netem_jitter_ms" != "0" ]] ||
     ! decimal_is_zero "$netem_reorder_pct" ||
     ! decimal_is_zero "$netem_duplicate_pct" ||
-    ! decimal_is_zero "$netem_corrupt_pct"
+    ! decimal_is_zero "$netem_corrupt_pct" ||
+    [[ "$netem_rate_mbit" != "0" ]]
 }
 
 netem_targets_node() {
@@ -240,6 +243,16 @@ validate_netem_config() {
     die "TRUSTIX_CROSS_HOST_NETEM_DELAY_MS must be a non-negative integer"
   [[ "$netem_jitter_ms" =~ ^(0|[1-9][0-9]*)$ ]] ||
     die "TRUSTIX_CROSS_HOST_NETEM_JITTER_MS must be a non-negative integer"
+  [[ "$netem_rate_mbit" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT must be a non-negative integer"
+  [[ "$netem_rate_mbit" -le 1000000 ]] ||
+    die "TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT must be in 0..1000000"
+  if [[ -z "$netem_limit_packets_explicit" && "$netem_rate_mbit" != "0" ]]; then
+    # Bound an unconfigured rate queue to roughly 100 ms of full-size packets.
+    netem_limit_packets=$(( (netem_rate_mbit * 100000 + 11999) / 12000 ))
+    [[ "$netem_limit_packets" -ge 1024 ]] || netem_limit_packets=1024
+    [[ "$netem_limit_packets" -le 262144 ]] || netem_limit_packets=262144
+  fi
   [[ "$netem_limit_packets" =~ ^[1-9][0-9]*$ ]] ||
     die "TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS must be a positive integer"
   [[ "$netem_limit_packets" -ge 1 && "$netem_limit_packets" -le 1048576 ]] ||
@@ -324,6 +337,7 @@ netem_qdisc_args() {
   decimal_is_zero "$netem_duplicate_pct" || args+=" duplicate ${netem_duplicate_pct}%"
   decimal_is_zero "$netem_corrupt_pct" || args+=" corrupt ${netem_corrupt_pct}%"
   decimal_is_zero "$netem_reorder_pct" || args+=" reorder ${netem_reorder_pct}%"
+  [[ "$netem_rate_mbit" == "0" ]] || args+=" rate ${netem_rate_mbit}mbit"
   printf '%s\n' "$args"
 }
 
@@ -341,7 +355,9 @@ jitter_ms=${netem_jitter_ms}
 reorder_pct=${netem_reorder_pct}
 duplicate_pct=${netem_duplicate_pct}
 corrupt_pct=${netem_corrupt_pct}
+rate_mbit=${netem_rate_mbit}
 limit_packets=${netem_limit_packets}
+limit_packets_explicit=$([[ -n "$netem_limit_packets_explicit" ]] && printf 1 || printf 0)
 disable_gro=${netem_disable_gro}
 active_seconds=${netem_active_seconds}
 require_inner_gso_latched_fallback=${require_inner_gso_latched_fallback}
@@ -2006,6 +2022,9 @@ record_netem_evidence() {
     printf 'format=trustix-cross-host-netem-evidence-v1\n'
     printf 'label=%s\n' "$label"
     printf 'loss_pct=%s\n' "$netem_loss_pct"
+    printf 'delay_ms=%s\n' "$netem_delay_ms"
+    printf 'jitter_ms=%s\n' "$netem_jitter_ms"
+    printf 'rate_mbit=%s\n' "$netem_rate_mbit"
   } >"$tmp"
   for node in a b; do
     targeted=0
@@ -3128,6 +3147,114 @@ done
 sed -n '1,240p' $(remote_quote "${dir}/logs/trustixd.log") >&2 || true
 exit 1
 "
+}
+
+case_requires_tix_tcp_full_kmod_readiness() {
+  [[ "$(case_fast_path)" == "full_kmod" &&
+    "$(case_encryption)" == "plaintext" ]] &&
+    case_has_endpoint_transport tix_tcp
+}
+
+tix_tcp_full_kmod_ready_node() {
+  local node="$1"
+  local api_port trustixctl peer endpoint payload module_values
+  local runtime_ready inner_flow_hash_sets shard_sequence_fallbacks
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  trustixctl="$(node_bin "$node" trustixctl)"
+  peer="$(node_value "$node" "$ix_b" "$ix_a")"
+  if [[ "$node" == "a" ]]; then
+    endpoint="$(case_endpoint_name_for_transport b tix_tcp)"
+  else
+    endpoint="$(case_endpoint_name_for_transport a tix_tcp)"
+  fi
+  payload="$(run_node "$node" "$(remote_quote "$trustixctl") -api http://127.0.0.1:${api_port} transports")" || return
+  printf '%s\n' "$payload" | python3 -c '
+import json
+import sys
+
+peer, endpoint, pool_size_raw = sys.argv[1:]
+pool_size = int(pool_size_raw)
+payload = json.load(sys.stdin)
+status = payload.get("tix_tcp") or {}
+if status.get("provider") != "kernel_datapath_full_plaintext":
+    raise SystemExit(1)
+for key in ("available", "fast_path", "inner_gso", "port_sharding"):
+    if status.get(key) is not True:
+        raise SystemExit(1)
+
+sessions = [
+    item for item in payload.get("sessions") or []
+    if item.get("transport") == "tix_tcp"
+    and item.get("peer") == peer
+    and item.get("endpoint") == endpoint
+]
+outbound = [item for item in sessions if item.get("direction") == "outbound"]
+inbound = [item for item in sessions if item.get("direction") == "inbound_reverse"]
+if len(outbound) < pool_size or len(inbound) < pool_size:
+    raise SystemExit(1)
+
+required = (
+    "tix_tcp_full_plaintext_kernel_datapath",
+    "tix_tcp_kernel_datapath_ready_local",
+    "tix_tcp_kernel_datapath_ready_peer",
+    "tix_tcp_kernel_datapath_ready_negotiated",
+    "tix_tcp_inner_gso_local",
+    "tix_tcp_inner_gso_peer",
+    "tix_tcp_inner_gso_negotiated",
+    "tix_tcp_port_sharding_local",
+    "tix_tcp_port_sharding_peer",
+    "tix_tcp_port_sharding_negotiated",
+)
+for item in sessions:
+    stats = item.get("stats") or {}
+    if stats.get("encryption") != "plaintext":
+        raise SystemExit(1)
+    extra = stats.get("extra") or {}
+    if any(extra.get(key) != 1 for key in required):
+        raise SystemExit(1)
+' "$peer" "$endpoint" "$session_pool_size" || return
+  module_values="$(run_node "$node" "set -Eeuo pipefail
+base=/sys/module/trustix_datapath/parameters
+printf '%s %s %s\n' \"\$(cat \"\${base}/inner_gso_runtime_ready\")\" \"\$(cat \"\${base}/tx_plaintext_inner_flow_hash_sets\")\" \"\$(cat \"\${base}/tx_plaintext_tix_tcp_shard_sequence_fallbacks\")\"")" || return
+  read -r runtime_ready inner_flow_hash_sets shard_sequence_fallbacks <<<"$module_values"
+  [[ "$runtime_ready" == "Y" &&
+    "$inner_flow_hash_sets" == "0" &&
+    "$shard_sequence_fallbacks" == "0" ]]
+}
+
+wait_for_tix_tcp_full_kmod_readiness() {
+  local attempt stable_polls=0
+  case_requires_tix_tcp_full_kmod_readiness || return 0
+  for attempt in $(seq 1 "$daemon_ready_attempts"); do
+    if tix_tcp_full_kmod_ready_node a && tix_tcp_full_kmod_ready_node b; then
+      stable_polls=$((stable_polls + 1))
+      if [[ "$stable_polls" -ge 2 ]]; then
+        collect_transport_snapshot startup-ready
+        {
+          printf 'format=trustix-tix-tcp-full-kmod-readiness-v1\n'
+          printf 'status=pass\n'
+          printf 'attempts=%s\n' "$attempt"
+          printf 'stable_polls=%s\n' "$stable_polls"
+          printf 'session_pool_size=%s\n' "$session_pool_size"
+        } >"${workdir}/tix-tcp-full-kmod-readiness.txt"
+        return 0
+      fi
+    else
+      stable_polls=0
+    fi
+    sleep "$daemon_ready_sleep"
+  done
+  collect_transport_snapshot startup-not-ready || true
+  collect_module_parameters a startup-not-ready || true
+  collect_module_parameters b startup-not-ready || true
+  {
+    printf 'format=trustix-tix-tcp-full-kmod-readiness-v1\n'
+    printf 'status=fail\n'
+    printf 'attempts=%s\n' "$daemon_ready_attempts"
+    printf 'stable_polls=%s\n' "$stable_polls"
+    printf 'session_pool_size=%s\n' "$session_pool_size"
+  } >"${workdir}/tix-tcp-full-kmod-readiness.txt"
+  return 1
 }
 
 collect_node_api() {
@@ -4397,6 +4524,8 @@ main() {
   wait_for_api a
   wait_for_api b
   wait_for_endpoint_listeners
+  wait_for_tix_tcp_full_kmod_readiness ||
+    die "TIX-TCP full-kmod sessions did not become stably ready before connectivity traffic"
   run_connectivity_checks
   if [[ "$require_inner_gso_latched_fallback" == "1" ]]; then
     collect_transport_snapshot netem-before-apply

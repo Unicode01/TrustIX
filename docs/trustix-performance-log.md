@@ -6583,3 +6583,91 @@ The datapath module SHA256 was
 `68da2a14a392e49b1e412279a837f227ad9b0551a03c5039aefa40f213035af5`.
 These 60-second runs correct the WAN throughput methodology and complement,
 but do not replace, the preceding 3600-second same-bridge production soak.
+
+<a id="2026-08-12-zaozhuang-pve-wan-condition-curve"></a>
+
+### 2026-08-12 Zaozhuang PVE WAN condition curve
+
+The same disposable Debian pair was used to measure the default plaintext
+TIX-TCP full-kmod inner-GSO path across RTT, random loss, jitter, and rate
+limits. Each direction ran sequentially for 30 seconds with 16 iperf streams,
+16 warmed sessions, and 256 MiB TCP autotune maxima. Delay, jitter, and loss
+were applied to the guest underlay egress interfaces. Rate limits were applied
+to both PVE tap egress interfaces instead: guest egress shaping introduced
+real `NET_XMIT_DROP` results, while guest ingress IFB shaping suppressed the
+natural inner-GSO workload. Rate queues were bounded to approximately 100 ms
+of full-size packets and were removed after every sample.
+
+The tested daemon was built from
+`276f712278bb7cd05b4733df7f61b3e716618ba2`, reported Go `1.25.12`, and had
+SHA256 `a1c694c5be6b43ce8cc9fbba3e3bab49810d7af2b6d88e6318e41b2ae83e3432`.
+Both guests used kernel `6.12.100+deb13-cloud-amd64`, 8 vCPUs, 8 GiB RAM,
+eight-queue virtio data NICs, and the same dedicated `vmbr3` bridge.
+
+| Configured RTT | Bare A-to-B / B-to-A | TrustIX A-to-B / B-to-A | Retention |
+| ---: | ---: | ---: | ---: |
+| 0 ms | 16.826 / 18.835 Gbps | 25.853 / 25.443 Gbps | 153.65% / 135.08% |
+| 10 ms | 24.216 / 24.176 Gbps | 25.922 / 25.509 Gbps | 107.04% / 105.51% |
+| 30 ms | 25.679 / 25.086 Gbps | 24.918 / 24.776 Gbps | 97.04% / 98.76% |
+| 50 ms | 25.080 / 25.348 Gbps | 24.689 / 24.240 Gbps | 98.44% / 95.63% |
+| 100 ms | 24.568 / 25.717 Gbps | 22.870 / 23.320 Gbps | 93.09% / 90.68% |
+| 200 ms | 15.626 / 14.885 Gbps | 14.813 / 12.910 Gbps | 94.80% / 86.73% |
+
+The greater-than-100% values at 0 and 10 ms reflect host queueing, run order,
+and GSO behavior; they are not a claim that encapsulation increases physical
+line capacity. From 30 through 200 ms, retention ranged from `86.73%` to
+`98.76%` in these samples.
+
+Random loss was placed only on node A egress with a 50 ms delay, so A-to-B is
+the impaired direction and B-to-A is the control direction:
+
+| Random loss | Bare A-to-B / B-to-A | TrustIX A-to-B / B-to-A |
+| ---: | ---: | ---: |
+| 0.001% | 27.131 / 24.482 Gbps | 24.655 / 24.625 Gbps |
+| 0.01% | 17.715 / 22.525 Gbps | 15.418 / 24.946 Gbps |
+| 0.1% | 2.702 / 24.685 Gbps | 2.694 / 24.185 Gbps |
+| 1% | 0.234 / 24.428 Gbps | 0.060 / 24.038 Gbps |
+
+These points primarily show TCP congestion response, not datapath capacity.
+The control direction remained in the 24-25 Gbps class while the impaired
+direction collapsed as expected. A single stochastic loss sample, especially
+at 1%, is not a throughput floor.
+
+| Jitter at 50 ms RTT | Bare A-to-B / B-to-A | TrustIX A-to-B / B-to-A |
+| ---: | ---: | ---: |
+| +/-1 ms | 24.369 / 24.201 Gbps | 23.685 / 24.206 Gbps |
+| +/-5 ms | 23.841 / 23.834 Gbps | 23.495 / 23.759 Gbps |
+| +/-10 ms | 23.609 / 23.465 Gbps | 23.459 / 23.584 Gbps |
+| +/-20 ms | 1.785 / 13.359 Gbps | 21.677 / 18.575 Gbps |
+
+The +/-20 ms point creates severe packet reordering and was highly variable.
+Three additional independently restarted pairs measured bare TCP medians of
+`3.931/5.108 Gbps` with ranges of `3.714-5.539` and `4.706-13.304 Gbps`.
+TrustIX medians were `18.442/21.150 Gbps`, with ranges of `17.847-20.165`
+and `12.388-21.169 Gbps`. All repeats completed, but this environment remains
+a variability result rather than a guaranteed floor.
+
+| Rate at 50 ms RTT | Bare A-to-B / B-to-A | TrustIX A-to-B / B-to-A | Retention |
+| ---: | ---: | ---: | ---: |
+| 100 Mbit/s | 95.071 / 94.925 Mbit/s | 90.288 / 90.152 Mbit/s | 94.97% / 94.97% |
+| 1 Gbit/s | 0.948 / 0.948 Gbps | 0.939 / 0.939 Gbps | 99.05% / 98.98% |
+| 2.5 Gbit/s | 2.367 / 2.367 Gbps | 2.371 / 2.347 Gbps | 100.20% / 99.17% |
+| 10 Gbit/s | 9.435 / 9.435 Gbps | 9.488 / 9.488 Gbps | 100.56% / 100.56% |
+| 25 Gbit/s | 23.488 / 23.512 Gbps | 23.482 / 23.472 Gbps | 99.98% / 99.83% |
+
+An initial strict audit found that the runner could send its first one or two
+connectivity packets before all TIX-TCP pool sessions had committed negotiated
+inner-GSO and port-sharding flags to the module. The runner now waits for both
+nodes to report the full-kmod provider, all outbound and inbound-reverse pool
+sessions, negotiated kernel readiness, inner GSO, port sharding, and
+`inner_gso_runtime_ready=Y` for two consecutive polls before sending traffic.
+It also rejects any startup shard-sequence or inner-flow-hash fallback.
+
+After that runner fix, all 19 TrustIX scenarios passed the strict verifier.
+Across 38 node artifacts, shard-sequence fallbacks and inner-flow hash sets
+were zero. The runs transmitted `1,742,274,335` inner-GSO TX segments. Boot
+IDs remained stable; pstore was empty; panic, Oops, watchdog, lockup, session,
+queue-drop, circuit, malformed-frame, and inner/outer GSO error checks were
+clean. Every owned qdisc was restored. This matrix characterizes short-run WAN
+behavior and test-harness readiness; it complements rather than replaces the
+preceding 3600-second production gate.

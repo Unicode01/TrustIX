@@ -67,6 +67,7 @@ func TestCrossHostSoakRunnerNetemDryRunContract(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT=1",
 		"TRUSTIX_CROSS_HOST_NETEM_DUPLICATE_PCT=.2",
 		"TRUSTIX_CROSS_HOST_NETEM_CORRUPT_PCT=0.03",
+		"TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT=2500",
 		"TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS=8192",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -88,15 +89,78 @@ func TestCrossHostSoakRunnerNetemDryRunContract(t *testing.T) {
 		"reorder_pct=1\n",
 		"duplicate_pct=.2\n",
 		"corrupt_pct=0.03\n",
+		"rate_mbit=2500\n",
 		"limit_packets=8192\n",
 		"disable_gro=1\n",
 		"handle=7e10:\n",
 		"underlay_a_if=eth0\n",
-		"qdisc_args=limit 8192 delay 20ms 5ms loss 0.1% duplicate .2% corrupt 0.03% reorder 1%\n",
+		"qdisc_args=limit 8192 delay 20ms 5ms loss 0.1% duplicate .2% corrupt 0.03% reorder 1% rate 2500mbit\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("netem contract missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestCrossHostSoakRunnerNetemRateAloneEnablesQdisc(t *testing.T) {
+	bash := requireGNUBash4(t)
+	workdir := filepath.Join(t.TempDir(), "netem-rate")
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(crossHostNetemDryRunEnv(workdir),
+		"TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT=100",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("netem rate-only dry-run failed: %v\n%s", err, out)
+	}
+	payload, err := os.ReadFile(filepath.Join(workdir, "netem-config.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"enabled=1\n",
+		"rate_mbit=100\n",
+		"limit_packets=1024\n",
+		"limit_packets_explicit=0\n",
+		"qdisc_args=limit 1024 rate 100mbit\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("netem rate-only contract missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCrossHostSoakRunnerNetemRateAutoLimitIsBounded(t *testing.T) {
+	bash := requireGNUBash4(t)
+	tests := []struct {
+		name string
+		rate string
+		want string
+	}{
+		{"minimum", "1", "limit_packets=1024\n"},
+		{"hundred-ms", "2500", "limit_packets=20834\n"},
+		{"maximum", "1000000", "limit_packets=262144\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workdir := filepath.Join(t.TempDir(), tc.name)
+			cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+			cmd.Dir = "."
+			cmd.Env = append(crossHostNetemDryRunEnv(workdir),
+				"TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT="+tc.rate,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("netem auto-limit dry-run failed: %v\n%s", err, out)
+			}
+			payload, err := os.ReadFile(filepath.Join(workdir, "netem-config.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(payload), tc.want) {
+				t.Fatalf("netem contract missing %q:\n%s", tc.want, payload)
+			}
+		})
 	}
 }
 
@@ -112,6 +176,9 @@ func TestCrossHostSoakRunnerRejectsInvalidNetemConfig(t *testing.T) {
 		{"negative-loss", "TRUSTIX_CROSS_HOST_NETEM_LOSS_PCT=-1", "must be a decimal percentage in 0..100"},
 		{"excess-loss", "TRUSTIX_CROSS_HOST_NETEM_LOSS_PCT=100.01", "must be a decimal percentage in 0..100"},
 		{"fractional-delay", "TRUSTIX_CROSS_HOST_NETEM_DELAY_MS=1.5", "must be a non-negative integer"},
+		{"negative-rate", "TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT=-1", "must be a non-negative integer"},
+		{"fractional-rate", "TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT=1.5", "must be a non-negative integer"},
+		{"excess-rate", "TRUSTIX_CROSS_HOST_NETEM_RATE_MBIT=1000001", "must be in 0..1000000"},
 		{"jitter-without-delay", "TRUSTIX_CROSS_HOST_NETEM_JITTER_MS=1", "requires TRUSTIX_CROSS_HOST_NETEM_DELAY_MS > 0"},
 		{"reorder-without-delay", "TRUSTIX_CROSS_HOST_NETEM_REORDER_PCT=1", "requires TRUSTIX_CROSS_HOST_NETEM_DELAY_MS > 0"},
 		{"zero-limit", "TRUSTIX_CROSS_HOST_NETEM_LIMIT_PACKETS=0", "must be a positive integer"},
