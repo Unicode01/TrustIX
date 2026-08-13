@@ -993,6 +993,220 @@ func TestTIXTCPLocalCapabilityRefreshIntervalAcceleratesInnerGSO(t *testing.T) {
 	}
 }
 
+func TestTIXTCPCapabilitySubscriptionPreservesTransientWithdrawal(t *testing.T) {
+	subscription := newTIXTCPCapabilitySubscription()
+	all := tixTCPCapabilityObservation{
+		capabilities: tixTCPCapabilityInnerTCPChecksumPartial |
+			tixTCPCapabilityInnerGSO |
+			tixTCPCapabilityPortSharding,
+	}
+	withoutGSO := tixTCPCapabilityObservation{
+		capabilities: tixTCPCapabilityInnerTCPChecksumPartial |
+			tixTCPCapabilityPortSharding,
+	}
+	subscription.publish(all)
+	subscription.publish(withoutGSO)
+	subscription.publish(all)
+
+	first, ok := subscription.take()
+	if !ok || first.capabilities != withoutGSO.capabilities {
+		t.Fatalf("first coalesced observation = %#x, %t, want withdrawal %#x", first.capabilities, ok, withoutGSO.capabilities)
+	}
+	second, ok := subscription.take()
+	if !ok || second.capabilities != all.capabilities {
+		t.Fatalf("second coalesced observation = %#x, %t, want latest %#x", second.capabilities, ok, all.capabilities)
+	}
+	if _, ok := subscription.take(); ok {
+		t.Fatal("capability subscription retained an observation after it was drained")
+	}
+}
+
+func TestTIXTCPCapabilityMonitorSharesProviderPollingAcrossSessions(t *testing.T) {
+	const sessionCount = 32
+	provider := &fakeCapabilityProvider{
+		fakeProvider: &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel},
+		capabilities: dataplane.TIXTCPCapabilities{
+			FullPlaintextKernel:     true,
+			InnerTCPChecksumPartial: true,
+			InnerGSO:                true,
+			PortSharding:            true,
+		},
+	}
+	monitor := newTIXTCPCapabilityMonitor(provider)
+	sessions := make([]*session, 0, sessionCount)
+	for index := 0; index < sessionCount; index++ {
+		sess := newSession(provider, nil, uint64(index+1), "ix-b", "server", dataplane.CryptoPlacementUserspace)
+		sess.capabilityMonitor = monitor
+		sess.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding)
+		if subscription := sess.startCapabilityMonitorSubscription(); subscription == nil {
+			t.Fatalf("session %d did not subscribe to the shared capability monitor", index)
+		}
+		sessions = append(sessions, sess)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool { return provider.calls.Load() >= 2 })
+	time.Sleep(75 * time.Millisecond)
+	if calls := provider.calls.Load(); calls >= sessionCount {
+		t.Fatalf("shared capability provider calls = %d, want fewer than %d sessions", calls, sessionCount)
+	}
+
+	for _, sess := range sessions {
+		sess.stopCapabilityMonitor()
+	}
+	eventually(t, ctx, func() bool {
+		monitor.mu.Lock()
+		defer monitor.mu.Unlock()
+		return len(monitor.subscriptions) == 0 && !monitor.running
+	})
+}
+
+func TestTIXTCPCapabilityMonitorReprobesAfterIdle(t *testing.T) {
+	provider := &fakeCapabilityProvider{
+		fakeProvider: &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel},
+		capabilities: dataplane.TIXTCPCapabilities{
+			FullPlaintextKernel:     true,
+			InnerTCPChecksumPartial: true,
+			InnerGSO:                true,
+			PortSharding:            true,
+		},
+	}
+	monitor := newTIXTCPCapabilityMonitor(provider)
+	firstSession := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	firstSession.capabilityMonitor = monitor
+	first := firstSession.startCapabilityMonitorSubscription()
+	if first == nil {
+		t.Fatal("first capability monitor subscription was rejected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool { return provider.calls.Load() > 0 })
+	firstSession.stopCapabilityMonitor()
+	eventually(t, ctx, func() bool {
+		monitor.mu.Lock()
+		defer monitor.mu.Unlock()
+		return len(monitor.subscriptions) == 0 && !monitor.running
+	})
+
+	provider.capabilities.InnerGSO = false
+	monitor.mu.Lock()
+	monitor.currentAt = time.Now().Add(-tixTCPCapabilityMonitorCacheTTL)
+	monitor.mu.Unlock()
+	secondSession := newSession(provider, nil, 2, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	secondSession.capabilityMonitor = monitor
+	second := secondSession.startCapabilityMonitorSubscription()
+	if second == nil {
+		t.Fatal("second capability monitor subscription was rejected")
+	}
+	t.Cleanup(secondSession.stopCapabilityMonitor)
+
+	select {
+	case <-second.wake:
+	case <-ctx.Done():
+		t.Fatal("restarted capability monitor did not publish a fresh observation")
+	}
+	observation, ok := second.take()
+	if !ok {
+		t.Fatal("restarted capability monitor notification had no observation")
+	}
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityPortSharding
+	if observation.capabilities != want {
+		t.Fatalf("restarted capability observation = %#x, want freshly probed %#x", observation.capabilities, want)
+	}
+}
+
+func TestTIXTCPCapabilityMonitorRejectsDuplicateSessionConsumer(t *testing.T) {
+	provider := &fakeCapabilityProvider{
+		fakeProvider: &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel},
+	}
+	monitor := newTIXTCPCapabilityMonitor(provider)
+	sess := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	sess.capabilityMonitor = monitor
+	first := sess.startCapabilityMonitorSubscription()
+	if first == nil {
+		t.Fatal("first capability monitor subscription was rejected")
+	}
+	if duplicate := sess.startCapabilityMonitorSubscription(); duplicate != nil {
+		t.Fatal("duplicate capability monitor consumer was accepted")
+	}
+	sess.stopCapabilityMonitorSubscription(first)
+	if replacement := sess.startCapabilityMonitorSubscription(); replacement == nil {
+		t.Fatal("capability monitor did not allow a replacement consumer after stop")
+	}
+	sess.stopCapabilityMonitor()
+}
+
+func TestTIXTCPCapabilityMonitorWithdrawsAllRegisteredSessions(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_CAPABILITY_ACK_TIMEOUT", "100ms")
+	t.Setenv("TRUSTIX_TIX_TCP_CAPABILITY_WITHDRAW_GRACE", "2ms")
+	const sessionCount = 8
+	provider := &fakeProvider{
+		statusProvider: tixTCPProviderFullPlaintextKernel,
+		flows:          make(map[uint64]dataplane.TIXTCPFlow),
+	}
+	provider.innerTCPChecksumPartial.Store(true)
+	provider.innerGSO.Store(true)
+	provider.portSharding.Store(true)
+	monitor := newTIXTCPCapabilityMonitor(provider)
+	clients := make([]*session, 0, sessionCount)
+	servers := make([]*session, 0, sessionCount)
+	for index := 0; index < sessionCount; index++ {
+		clientConn, serverConn := net.Pipe()
+		flowID := uint64(index + 1)
+		client := newSession(provider, nil, flowID, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+		client.capabilityMonitor = monitor
+		client.compatControl = stream.NewSession(clientConn)
+		client.fullPlaintextKernelDatapath = true
+		client.kernelDatapathReady.Store(true)
+		client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding)
+		client.SetKernelDatapathSessionStateChangeHook(func() error { return nil })
+		server := newSession(nil, nil, flowID, "ix-a", "server", dataplane.CryptoPlacementUserspace)
+		server.compatControl = stream.NewSession(serverConn)
+		go client.readCompatControl(context.Background())
+		go server.readCompatControl(context.Background())
+		go client.monitorLocalCapabilities(context.Background())
+		clients = append(clients, client)
+		servers = append(servers, server)
+	}
+	t.Cleanup(func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+		for _, server := range servers {
+			_ = server.Close()
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool {
+		monitor.mu.Lock()
+		defer monitor.mu.Unlock()
+		return len(monitor.subscriptions) == sessionCount
+	})
+	provider.innerGSO.Store(false)
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityPortSharding
+	eventually(t, ctx, func() bool {
+		for _, client := range clients {
+			if client.localCapabilities.Load() != want {
+				return false
+			}
+		}
+		return true
+	})
+	for index, client := range clients {
+		if client.isClosed() {
+			t.Fatalf("shared capability withdrawal closed client session %d", index)
+		}
+		stats := client.Stats().Extra
+		if stats[tixTCPStatCapabilityWithdrawals] != 1 || stats[tixTCPStatCapabilityWithdrawalAcks] != 1 {
+			t.Fatalf("client %d withdrawal telemetry = %#v", index, stats)
+		}
+	}
+}
+
 func TestTIXTCPLocalCapabilityMonitorClosesAfterAdvertisementFailure(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	provider := &fakeProvider{

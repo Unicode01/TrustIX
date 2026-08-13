@@ -111,7 +111,8 @@ func TestHTTPServersSetResourceTimeouts(t *testing.T) {
 	if management.ReadHeaderTimeout != managementHTTPReadHeaderTimeout ||
 		management.WriteTimeout != managementHTTPWriteTimeout ||
 		management.IdleTimeout != managementHTTPIdleTimeout ||
-		management.MaxHeaderBytes != httpMaxHeaderBytes {
+		management.MaxHeaderBytes != httpMaxHeaderBytes ||
+		management.ErrorLog == nil {
 		t.Fatalf("management server timeouts = read_header:%s write:%s idle:%s max_header:%d",
 			management.ReadHeaderTimeout, management.WriteTimeout, management.IdleTimeout, management.MaxHeaderBytes)
 	}
@@ -120,7 +121,8 @@ func TestHTTPServersSetResourceTimeouts(t *testing.T) {
 	if peer.ReadHeaderTimeout != peerHTTPReadHeaderTimeout ||
 		peer.WriteTimeout != peerHTTPWriteTimeout ||
 		peer.IdleTimeout != peerHTTPIdleTimeout ||
-		peer.MaxHeaderBytes != httpMaxHeaderBytes {
+		peer.MaxHeaderBytes != httpMaxHeaderBytes ||
+		peer.ErrorLog == nil {
 		t.Fatalf("peer server timeouts = read_header:%s write:%s idle:%s max_header:%d",
 			peer.ReadHeaderTimeout, peer.WriteTimeout, peer.IdleTimeout, peer.MaxHeaderBytes)
 	}

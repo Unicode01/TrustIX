@@ -776,6 +776,7 @@ func (daemon *Daemon) startPeerAPIServer() (*http.Server, <-chan error, error) {
 func newManagementHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           handler,
+		ErrorLog:          newHTTPServerErrorLogger(),
 		ReadHeaderTimeout: managementHTTPReadHeaderTimeout,
 		WriteTimeout:      managementHTTPWriteTimeout,
 		IdleTimeout:       managementHTTPIdleTimeout,
@@ -786,6 +787,7 @@ func newManagementHTTPServer(handler http.Handler) *http.Server {
 func newPeerHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           handler,
+		ErrorLog:          newHTTPServerErrorLogger(),
 		ReadHeaderTimeout: peerHTTPReadHeaderTimeout,
 		WriteTimeout:      peerHTTPWriteTimeout,
 		IdleTimeout:       peerHTTPIdleTimeout,

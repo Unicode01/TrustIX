@@ -148,8 +148,9 @@ type Options struct {
 }
 
 type Transport struct {
-	provider dataplane.TIXTCPProvider
-	options  Options
+	provider          dataplane.TIXTCPProvider
+	options           Options
+	capabilityMonitor *tixTCPCapabilityMonitor
 }
 
 func New(provider dataplane.TIXTCPProvider, options ...Options) *Transport {
@@ -157,7 +158,11 @@ func New(provider dataplane.TIXTCPProvider, options ...Options) *Transport {
 	if len(options) > 0 {
 		opts = options[0]
 	}
-	return &Transport{provider: provider, options: opts}
+	return &Transport{
+		provider:          provider,
+		options:           opts,
+		capabilityMonitor: newTIXTCPCapabilityMonitor(provider),
+	}
 }
 
 func tixTCPSessionBuffer() int {
@@ -373,6 +378,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			return nil, errors.Join(err, closeErr, deleteErr)
 		}
 		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, flow.LocalAddress, flow.RemoteAddress)
+		session.capabilityMonitor = transportImpl.capabilityMonitor
 		session.compatControl = compatControl
 		session.fullPlaintextKernelDatapath = fullPlaintextKernel
 		session.fullSecureKernelDatapath = fullSecureKernel
@@ -431,6 +437,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	}
 	listener := &listener{
 		provider:                    transportImpl.provider,
+		capabilityMonitor:           transportImpl.capabilityMonitor,
 		endpoint:                    ep,
 		subscription:                subscription,
 		acceptCh:                    make(chan transport.Session, 64),
@@ -470,14 +477,15 @@ func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep trans
 		return nil, nil
 	}
 	listener := &listener{
-		provider:       transportImpl.provider,
-		endpoint:       ep,
-		acceptCh:       make(chan transport.Session, 64),
-		compatAcceptCh: make(chan transport.Session, 64),
-		done:           make(chan struct{}),
-		sessions:       make(map[uint64]*session),
-		placement:      dataplane.CryptoPlacementUserspace,
-		compatListener: compatListener,
+		provider:          transportImpl.provider,
+		capabilityMonitor: transportImpl.capabilityMonitor,
+		endpoint:          ep,
+		acceptCh:          make(chan transport.Session, 64),
+		compatAcceptCh:    make(chan transport.Session, 64),
+		done:              make(chan struct{}),
+		sessions:          make(map[uint64]*session),
+		placement:         dataplane.CryptoPlacementUserspace,
+		compatListener:    compatListener,
 	}
 	go listener.closeOnContext(ctx)
 	go listener.acceptCompatPrimers()
@@ -486,6 +494,7 @@ func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep trans
 
 type listener struct {
 	provider                    dataplane.TIXTCPProvider
+	capabilityMonitor           *tixTCPCapabilityMonitor
 	endpoint                    transport.Endpoint
 	subscription                dataplane.TIXTCPSubscription
 	acceptCh                    chan transport.Session
@@ -734,6 +743,7 @@ func (listener *listener) acceptCompatPrimers() {
 			continue
 		}
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
+		sess.capabilityMonitor = listener.capabilityMonitor
 		sess.compatControl = control
 		sess.fullPlaintextKernelDatapath = listener.fullPlaintextKernelDatapath
 		sess.fullSecureKernelDatapath = listener.fullSecureKernelDatapath
@@ -773,7 +783,14 @@ func (listener *listener) currentLocalCapabilities() uint64 {
 		(!listener.fullPlaintextKernelDatapath && !listener.fullSecureKernelDatapath) {
 		return 0
 	}
-	capabilities, err := tixTCPProviderLocalCapabilities(context.Background(), listener.provider)
+	var capabilities uint64
+	var err error
+	if listener.capabilityMonitor != nil {
+		observation := listener.capabilityMonitor.observe(context.Background())
+		capabilities, err = observation.capabilities, observation.err
+	} else {
+		capabilities, err = tixTCPProviderLocalCapabilities(context.Background(), listener.provider)
+	}
 	if err != nil {
 		return 0
 	}
@@ -857,6 +874,7 @@ func (listener *listener) dispatch(frame dataplane.TIXTCPFrame) {
 			return
 		}
 		sess = newSession(listener.provider, nil, frame.FlowID, frame.Peer, listener.endpoint.Name, listener.placement, "", "")
+		sess.capabilityMonitor = listener.capabilityMonitor
 		listener.sessions[frame.FlowID] = sess
 		select {
 		case listener.acceptCh <- sess:
@@ -901,6 +919,7 @@ func (listener *listener) dispatchBatch(frames []dataplane.TIXTCPFrame) {
 				continue
 			}
 			sess = newSession(listener.provider, nil, frame.FlowID, frame.Peer, listener.endpoint.Name, listener.placement, "", "")
+			sess.capabilityMonitor = listener.capabilityMonitor
 			listener.sessions[frame.FlowID] = sess
 			select {
 			case listener.acceptCh <- sess:
@@ -946,6 +965,7 @@ func (listener *listener) dispatchBatch(frames []dataplane.TIXTCPFrame) {
 
 type session struct {
 	provider                    dataplane.TIXTCPProvider
+	capabilityMonitor           *tixTCPCapabilityMonitor
 	subscription                dataplane.TIXTCPSubscription
 	flowID                      uint64
 	peer                        core.IXID
@@ -986,6 +1006,10 @@ type session struct {
 	cryptoOffloaded             bool
 	fullPlaintextKernelDatapath bool
 	fullSecureKernelDatapath    bool
+	capabilityMonitorMu         sync.Mutex
+	capabilitySubscription      *tixTCPCapabilitySubscription
+	capabilityMonitorActive     bool
+	capabilityMonitorStopped    bool
 	localCapabilities           atomic.Uint64
 	peerCapabilities            atomic.Uint64
 	capabilityRefreshFailed     atomic.Bool
@@ -1339,6 +1363,12 @@ func (session *session) refreshLocalCapabilities(ctx context.Context) error {
 		return nil
 	}
 	capabilities, statusErr := tixTCPProviderLocalCapabilities(ctx, session.provider)
+	return session.refreshLocalCapabilitiesFromObservation(ctx, capabilities, statusErr)
+}
+
+func (session *session) refreshLocalCapabilitiesFromObservation(
+	ctx context.Context, capabilities uint64, statusErr error,
+) error {
 	current := session.localCapabilities.Load()
 	if capabilities == current {
 		if statusErr != nil {
@@ -1397,8 +1427,8 @@ func (session *session) monitorLocalCapabilities(ctx context.Context) {
 		(!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
 		return
 	}
-	refresh := func() bool {
-		if err := session.refreshLocalCapabilities(ctx); err != nil {
+	refresh := func(err error) bool {
+		if err != nil {
 			if errors.Is(err, errTIXTCPCapabilityReconnect) {
 				session.capabilityRefreshFailed.Store(false)
 				transport.ObserveAsyncError(
@@ -1429,7 +1459,34 @@ func (session *session) monitorLocalCapabilities(ctx context.Context) {
 		session.capabilityRefreshFailed.Store(false)
 		return true
 	}
-	if !refresh() {
+	if session.capabilityMonitor != nil {
+		subscription := session.startCapabilityMonitorSubscription()
+		if subscription == nil {
+			return
+		}
+		defer session.stopCapabilityMonitorSubscription(subscription)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-session.closed:
+				return
+			case <-subscription.wake:
+				for {
+					observation, ok := subscription.take()
+					if !ok {
+						break
+					}
+					if !refresh(session.refreshLocalCapabilitiesFromObservation(
+						ctx, observation.capabilities, observation.err,
+					)) {
+						return
+					}
+				}
+			}
+		}
+	}
+	if !refresh(session.refreshLocalCapabilities(ctx)) {
 		return
 	}
 	timer := time.NewTimer(session.localCapabilityRefreshInterval())
@@ -1441,12 +1498,58 @@ func (session *session) monitorLocalCapabilities(ctx context.Context) {
 		case <-session.closed:
 			return
 		case <-timer.C:
-			if !refresh() {
+			if !refresh(session.refreshLocalCapabilities(ctx)) {
 				return
 			}
 			timer.Reset(session.localCapabilityRefreshInterval())
 		}
 	}
+}
+
+func (session *session) startCapabilityMonitorSubscription() *tixTCPCapabilitySubscription {
+	if session == nil || session.capabilityMonitor == nil {
+		return nil
+	}
+	session.capabilityMonitorMu.Lock()
+	defer session.capabilityMonitorMu.Unlock()
+	if session.capabilityMonitorStopped || session.capabilityMonitorActive || session.isClosed() {
+		return nil
+	}
+	subscription := session.capabilityMonitor.subscribe(session)
+	if subscription == nil {
+		return nil
+	}
+	session.capabilitySubscription = subscription
+	session.capabilityMonitorActive = true
+	return subscription
+}
+
+func (session *session) stopCapabilityMonitorSubscription(subscription *tixTCPCapabilitySubscription) {
+	if session == nil || subscription == nil {
+		return
+	}
+	session.capabilityMonitorMu.Lock()
+	if session.capabilitySubscription == subscription {
+		session.capabilitySubscription = nil
+		session.capabilityMonitorActive = false
+	}
+	monitor := session.capabilityMonitor
+	session.capabilityMonitorMu.Unlock()
+	monitor.unsubscribe(subscription)
+}
+
+func (session *session) stopCapabilityMonitor() {
+	if session == nil {
+		return
+	}
+	session.capabilityMonitorMu.Lock()
+	session.capabilityMonitorStopped = true
+	subscription := session.capabilitySubscription
+	session.capabilitySubscription = nil
+	session.capabilityMonitorActive = false
+	monitor := session.capabilityMonitor
+	session.capabilityMonitorMu.Unlock()
+	monitor.unsubscribe(subscription)
 }
 
 func (session *session) localCapabilityRefreshInterval() time.Duration {
@@ -2602,6 +2705,7 @@ func clearBytes(payload []byte) {
 func (session *session) Close() error {
 	session.closeOnce.Do(func() {
 		var errs []error
+		session.stopCapabilityMonitor()
 		session.SetKernelDatapathSessionStateChangeHook(nil)
 		if deleter, ok := session.provider.(dataplane.TIXTCPFlowDeleter); ok && !session.keepFlowOnClose {
 			if err := deleter.DeleteTIXTCPFlows(context.Background(), []uint64{session.flowID}); err != nil {

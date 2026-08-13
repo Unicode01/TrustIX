@@ -203,7 +203,7 @@ func (daemon *Daemon) startManagementVIPAPIServerLocked(target managementVIPTarg
 		}
 		listener = tls.NewListener(listener, tlsConf)
 	}
-	server := &http.Server{Handler: daemon.managementVIPProxyHandler(target.IXID)}
+	server := newManagementHTTPServer(daemon.managementVIPProxyHandler(target.IXID))
 	daemon.apiServers = append(daemon.apiServers, apiServerRuntime{
 		Name:   name,
 		Listen: listen,
